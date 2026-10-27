@@ -7,14 +7,18 @@ namespace App\Core;
 use Throwable;
 
 /**
- * Núcleo mínimo del monolito: arranque, enrutamiento y respuesta JSON.
- * Las rutas se irán registrando aquí (o en src/Core/routes.php) a medida que avancen las fases.
+ * Arranque HTTP: construye el contenedor, resuelve la petición y normaliza la salida.
+ * La construcción va dentro del try para que un fallo de arranque también devuelva
+ * JSON 500 en lugar de una traza HTML con código 200.
  */
 final class Application
 {
+    private ?Container $container = null;
+    private ?Router $router = null;
+
     public function __construct(
         private readonly string $root,
-        private readonly array $config,
+        private readonly array $configValues,
         private readonly string $requestId,
     ) {
     }
@@ -22,88 +26,86 @@ final class Application
     public function run(): void
     {
         try {
-            $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
-            $path = $this->resolvePath();
-            [$status, $payload] = $this->dispatch($method, $path);
+            $this->container = $this->buildContainer();
+            $this->router = $this->buildRouter();
 
-            http_response_code($status);
-            $this->sendJson($payload);
+            $request = Request::fromGlobals($this->requestId);
+            $this->router->handle($request)->send();
+        } catch (ApiException $e) {
+            $this->respondWithError($e->status, $e->errorCode, $e->getMessage(), $e->fields, $e->headers);
         } catch (Throwable $e) {
-            error_log(sprintf(
-                '[%s] %s: %s en %s:%d',
-                $this->requestId,
-                $e::class,
-                $e->getMessage(),
-                $e->getFile(),
-                $e->getLine()
-            ));
-
-            http_response_code(500);
-            $this->sendJson([
-                'error' => [
-                    'code' => 'INTERNAL_ERROR',
-                    'message' => 'Ocurrió un error inesperado.',
-                ],
-                'request_id' => $this->requestId,
-            ]);
+            $this->log($e);
+            $this->respondWithError(500, 'INTERNAL_ERROR', 'Ocurrió un error inesperado.');
         }
     }
 
-    /**
-     * @return array{0:int, 1:array<string, mixed>}
-     */
-    private function dispatch(string $method, string $path): array
+    public function container(): Container
     {
-        if ($method === 'GET' && ($path === '/' || $path === '/api/v1')) {
-            return [200, [
-                'data' => [
-                    'app' => $this->config['app']['name'] ?? 'Gestión',
-                    'version' => $this->config['app']['version'] ?? '0.0.0',
-                    'status' => 'ok',
-                ],
-            ]];
+        return $this->container ??= $this->buildContainer();
+    }
+
+    private function buildContainer(): Container
+    {
+        $container = new Container();
+        $config = new Config($this->configValues);
+
+        $container->singleton(Config::class, static fn (): Config => $config);
+        $container->singleton(Database::class, static fn (Container $c): Database => new Database($c->get(Config::class)));
+
+        if (is_file($this->root . '/src/Core/services.php')) {
+            /** @var callable(Container, string):void $register */
+            $register = require $this->root . '/src/Core/services.php';
+            $register($container, $this->root);
         }
 
-        if ($method === 'GET' && $path === '/api/v1/health') {
-            return [200, [
-                'data' => [
-                    'status' => 'ok',
-                    'time' => gmdate('c'),
-                ],
-                'meta' => ['request_id' => $this->requestId],
-            ]];
+        return $container;
+    }
+
+    private function buildRouter(): Router
+    {
+        $container = $this->container();
+        $router = new Router($container);
+
+        if (is_file($this->root . '/src/Core/middleware.php')) {
+            /** @var callable(Router, Container):void $register */
+            $register = require $this->root . '/src/Core/middleware.php';
+            $register($router, $container);
         }
 
-        return [404, [
-            'error' => [
-                'code' => 'NOT_FOUND',
-                'message' => 'Ruta no encontrada.',
-            ],
-            'request_id' => $this->requestId,
-        ]];
+        /** @var callable(Router, Container):void $register */
+        $register = require $this->root . '/src/Core/routes.php';
+        $register($router, $container);
+
+        return $router;
     }
 
     /**
-     * Soporta mod_rewrite y, en su defecto, index.php?r=/api/v1/...
+     * @param array<string, mixed>  $fields
+     * @param array<string, string> $headers
      */
-    private function resolvePath(): string
-    {
-        if (isset($_GET['r']) && is_string($_GET['r']) && $_GET['r'] !== '') {
-            $path = '/' . ltrim($_GET['r'], '/');
-        } else {
-            $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-            $path = is_string($path) ? $path : '/';
+    private function respondWithError(
+        int $status,
+        string $code,
+        string $message,
+        array $fields = [],
+        array $headers = [],
+    ): void {
+        foreach ($headers as $name => $value) {
+            header($name . ': ' . $value);
         }
 
-        return rtrim($path, '/') === '' ? '/' : rtrim($path, '/');
+        Response::error($status, $code, $message, $fields, $this->requestId)->send();
     }
 
-    /**
-     * @param array<string, mixed> $payload
-     */
-    private function sendJson(array $payload): void
+    private function log(Throwable $e): void
     {
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        error_log(sprintf(
+            '[%s] %s: %s en %s:%d',
+            $this->requestId,
+            $e::class,
+            $e->getMessage(),
+            $e->getFile(),
+            $e->getLine()
+        ));
     }
 }

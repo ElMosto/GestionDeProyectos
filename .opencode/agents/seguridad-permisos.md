@@ -13,6 +13,15 @@ permissions:
     resource: "src/Policies/**"
     effect: allow
   - action: edit
+    resource: "src/Core/middleware.php"
+    effect: allow
+  - action: edit
+    resource: "src/Core/routes/**"
+    effect: allow
+  - action: edit
+    resource: "src/Core/providers/**"
+    effect: allow
+  - action: edit
     resource: "docs/seguridad.md"
     effect: allow
 ---

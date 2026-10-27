@@ -12,9 +12,15 @@ use App\Core\Application;
 $root = dirname(__DIR__);
 $requestId = bin2hex(random_bytes(8));
 
+// Una API nunca devuelve trazas al cliente; los errores van al log privado.
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+ini_set('error_log', $root . '/storage/logs/php-error.log');
+
 header('X-Request-Id: ' . $requestId);
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: strict-origin-when-cross-origin');
+header('Cache-Control: no-store');
 
 $fail = static function (int $status, string $code, string $message) use ($requestId): never {
     http_response_code($status);

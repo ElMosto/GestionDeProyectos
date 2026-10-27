@@ -1,11 +1,12 @@
 openapi: 3.1.0
 info:
   title: Gestión de Proyectos — Estudio Musical
-  version: 0.1.0
+  version: 0.3.0
   description: |
     API del sistema de gestión del estudio musical.
 
-    Estado: esqueleto (fase 0). Solo existe `/health`; el resto se añade en las fases 1-6.
+    Estado: fase 1. Autenticación, perfil, administración de usuarios y clientes.
+    Proyectos, ventas, pagos, reservas y agenda se añaden en las fases 2-6.
 
     Convenciones vinculantes (ver `docs/api-movil.md`):
     - Importes y cantidades como **string** decimal.
@@ -13,7 +14,10 @@ info:
     - Fechas ISO 8601 con zona; se almacenan en UTC.
     - Éxito: `{data, meta}`. Error: `{error:{code,message,fields},request_id}`.
     - Escrituras con `Idempotency-Key` cuando crean dinero o bloquean espacio.
-    - Ediciones con `If-Match` / `expected_version`.
+    - En fase 1 las ediciones de usuarios/clientes exigen `version` en el cuerpo.
+    - Con cookie, toda escritura exige X-CSRF-Token; con Bearer válido no.
+    - `must_change_password` limita el acceso a identidad, CSRF, logout,
+      avatar de lectura y cambio de contraseña hasta sustituir la clave temporal.
 
 servers:
   - url: /api/v1
@@ -24,10 +28,258 @@ security:
   - bearerAuth: []
 
 tags:
+  - name: acceso
+    description: Sesión web, perfil propio y dispositivos móviles (§5, §6, D-08)
   - name: sistema
     description: Estado del servicio
+  - name: usuarios
+    description: Administración de cuentas y directorio mínimo (§5)
+  - name: clientes
+    description: Clientes NORMAL/BANDA y recorte de campos sensibles (§7)
 
 paths:
+  /auth/csrf:
+    get:
+      tags: [acceso]
+      operationId: getCsrfToken
+      summary: Obtener token CSRF de la sesión web
+      security: []
+      responses:
+        '200':
+          description: Inicia una sesión si no existe; conserva el token al rotar la cookie.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [token]
+                    properties:
+                      token: {type: string, minLength: 64, maxLength: 64}
+  /auth/login:
+    post:
+      tags: [acceso]
+      operationId: login
+      summary: Iniciar sesión con correo y contraseña
+      description: |
+        Exige cookie obtenida en /auth/csrf y X-CSRF-Token. Rota el ID de sesión.
+        Cuenta inexistente, inactiva o contraseña incorrecta producen el mismo 401.
+        No existe endpoint de registro público.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string, format: email}
+                password: {type: string, writeOnly: true}
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '401': {$ref: '#/components/responses/InvalidCredentials'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /auth/logout:
+    post:
+      tags: [acceso]
+      operationId: logout
+      summary: Cerrar sesión o revocar el token Bearer utilizado
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204': {description: Sesión destruida o token revocado.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+  /auth/me:
+    get:
+      tags: [acceso]
+      operationId: getIdentity
+      summary: Identidad y capacidades de la cuenta autenticada
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+  /me:
+    get:
+      tags: [acceso]
+      operationId: getOwnProfile
+      summary: Consultar el perfil propio
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+    patch:
+      tags: [acceso]
+      operationId: updateOwnProfile
+      summary: Editar datos y preferencias del perfil propio
+      description: Rechaza correo, rol, estado, permisos y cualquier campo desconocido.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: {type: string, minLength: 1, maxLength: 120}
+                phone: {type: [string, 'null'], maxLength: 32}
+                job_title: {type: [string, 'null'], maxLength: 120}
+                timezone: {type: string, description: Identificador IANA.}
+                notification_prefs:
+                  type: [object, 'null']
+                  additionalProperties: {type: boolean}
+                  maxProperties: 20
+                version: {type: string, pattern: '^[1-9][0-9]*$'}
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /me/password:
+    post:
+      tags: [acceso]
+      operationId: changeOwnPassword
+      summary: Cambiar contraseña verificando la actual
+      description: |
+        Permite salir del cambio obligatorio. Revoca todos los tokens móviles y
+        rota la sesión web actual. No promete invalidar otras sesiones web.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: {type: string, writeOnly: true}
+                new_password: {type: string, minLength: 12, writeOnly: true}
+                new_password_confirmation: {type: string, writeOnly: true}
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /me/avatar:
+    get:
+      tags: [acceso]
+      operationId: getOwnAvatar
+      summary: Leer el avatar privado de la cuenta autenticada
+      responses:
+        '200':
+          description: Imagen reprocesada de 512 × 512 con Cache-Control privado.
+          content:
+            image/png: {schema: {type: string, format: binary}}
+            image/jpeg: {schema: {type: string, format: binary}}
+            image/webp: {schema: {type: string, format: binary}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      tags: [acceso]
+      operationId: uploadOwnAvatar
+      summary: Subir avatar JPG, PNG o WebP
+      description: Máximo 2 MiB; MIME real y reprocesamiento con GD. SVG y ejecutables rechazados.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [avatar]
+              properties:
+                avatar: {type: string, format: binary}
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /me/tokens:
+    get:
+      tags: [acceso]
+      operationId: listOwnTokens
+      summary: Listar dispositivos propios sin token ni hash
+      responses:
+        '200':
+          description: Dispositivos no revocados de la cuenta autenticada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/DeviceToken'}
+                  meta:
+                    type: object
+                    properties:
+                      total: {type: integer}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+    post:
+      tags: [acceso]
+      operationId: issueOwnToken
+      summary: Vincular un dispositivo y mostrar token una sola vez
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 80}
+      responses:
+        '201':
+          description: Token opaco de 32 bytes base64url; en BD solo se guarda SHA-256.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [id, name, token, token_type, expires_at]
+                    properties:
+                      id: {type: string}
+                      name: {type: string}
+                      token: {type: string}
+                      token_type: {type: string, const: Bearer}
+                      expires_at: {type: string, format: date-time}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /me/tokens/{id}:
+    delete:
+      tags: [acceso]
+      operationId: revokeOwnToken
+      summary: Revocar un dispositivo propio
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[0-9]+$'}
+      responses:
+        '204': {description: Token revocado; usarlo otra vez devuelve 401.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /health:
     get:
       tags: [sistema]
@@ -59,6 +311,474 @@ paths:
                       request_id:
                         type: string
 
+  /users:
+    get:
+      tags: [usuarios]
+      summary: Listar usuarios
+      description: |
+        Requiere `users.manage` (solo ADMINISTRADOR). Lista paginada con filtros
+        `q` (nombre o correo), `role` (código) y `active` (0/1). El orden solo
+        admite `name`, `created_at` y `last_login_at`.
+      operationId: listUsers
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: q
+          in: query
+          description: Texto libre sobre nombre o correo.
+          schema:
+            type: string
+            maxLength: 120
+        - name: role
+          in: query
+          description: Código de rol.
+          schema:
+            type: string
+            enum: [ADMINISTRADOR, LIDER_PROYECTO, COLABORADOR]
+        - name: active
+          in: query
+          description: 1 = activos, 0 = desactivados.
+          schema:
+            type: integer
+            enum: [0, 1]
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, created_at, last_login_at]
+            default: name
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+      responses:
+        '200':
+          description: Lista paginada de usuarios sin `password_hash`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [usuarios]
+      summary: Crear cuenta
+      description: |
+        Requiere `users.manage`. El correo se normaliza a minúsculas y es único
+        (`409 EMAIL_TAKEN`). La cuenta nace activa y con
+        `must_change_password = 1`. La contraseña inicial debe cumplir
+        `security.password_min_length` (12 por defecto).
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: Cuenta creada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /users/directory:
+    get:
+      tags: [usuarios]
+      summary: Directorio mínimo de usuarios activos
+      description: |
+        Requiere `users.directory`. Cualquier usuario activo lo consulta para
+        asignaciones e invitaciones. Solo devuelve `id`, `name`, `job_title` y
+        `role.code`; nunca correo, teléfono ni estado de la cuenta.
+      operationId: getUserDirectory
+      responses:
+        '200':
+          description: Usuarios activos ordenados por nombre.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserDirectoryEntry'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /users/{id}:
+    get:
+      tags: [usuarios]
+      summary: Detalle de una cuenta
+      description: Requiere `users.manage`. Nunca devuelve `password_hash`.
+      operationId: getUser
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Cuenta encontrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [usuarios]
+      summary: Editar cuenta o cambiar rol
+      description: |
+        Requiere `users.manage`. Edita nombre, teléfono, cargo, zona horaria y rol.
+        El propio actor no puede cambiar su rol. Un cambio de rol audita
+        `ROLE_CHANGE` y respeta al último administrador activo
+        (`409 LAST_ADMIN_PROTECTED`). `version` es obligatoria; una versión
+        desactualizada devuelve `409 VERSION_CONFLICT`.
+      operationId: updateUser
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: Cuenta actualizada; `version` incrementada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /users/{id}/deactivate:
+    post:
+      tags: [usuarios]
+      summary: Desactivar cuenta
+      description: |
+        Requiere `users.manage`. Baja lógica idempotente: revoca los tokens del
+        usuario y las sesiones abiertas dejan de valer en la siguiente petición.
+        El último administrador activo no se puede desactivar
+        (`409 LAST_ADMIN_PROTECTED`). Audita `USER_DEACTIVATE`.
+      operationId: deactivateUser
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Cuenta desactivada (o ya estaba desactivada).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /users/{id}/reactivate:
+    post:
+      tags: [usuarios]
+      summary: Reactivar cuenta
+      description: Requiere `users.manage`. Reactivación idempotente; audita `USER_REACTIVATE`.
+      operationId: reactivateUser
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Cuenta activa (o ya estaba activa).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{id}/reset-password:
+    post:
+      tags: [usuarios]
+      summary: Restablecer acceso con clave temporal
+      description: |
+        Requiere `users.manage`. Emite una clave temporal de un solo uso (20
+        caracteres), fija `must_change_password = 1`, revoca los tokens móviles y
+        audita `PASSWORD_RESET_BY_ADMIN`. La clave en claro solo aparece en esta
+        respuesta: no se guarda ni se registra en la bitácora.
+      operationId: resetUserPassword
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Clave temporal emitida una sola vez.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TemporaryPasswordResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /clients:
+    get:
+      tags: [clientes]
+      summary: Listar clientes
+      description: |
+        Requiere `clients.view`. El directorio mínimo (id, tipo, nombre, contacto,
+        teléfono y estado) lo ve cualquier usuario activo. `email`, `address`,
+        `notes`, `representative_name`, `created_by`, fechas y `version` solo se
+        incluyen para ADMIN (`clients.viewSensitive`) o para el creador del
+        registro. Nunca se devuelven notas ni dirección a un colaborador que no
+        creó el cliente.
+      operationId: listClients
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: q
+          in: query
+          description: Texto libre sobre nombre, contacto, representante, teléfono o correo.
+          schema:
+            type: string
+            maxLength: 120
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [NORMAL, BANDA]
+        - name: active
+          in: query
+          schema:
+            type: integer
+            enum: [0, 1]
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, created_at, updated_at]
+            default: name
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+      responses:
+        '200':
+          description: Lista paginada con recorte de campos por permiso.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Client'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [clientes]
+      summary: Crear cliente
+      description: |
+        Requiere `clients.create` (cualquier usuario activo). Una BANDA exige
+        `representative_name` y `phone`. Se devuelven advertencias de posibles
+        duplicados por nombre normalizado, teléfono o correo en `meta.warnings`,
+        sin bloquear el alta. `created_by` es el actor y `version` empieza en 1.
+      operationId: createClient
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientCreate'
+      responses:
+        '201':
+          description: Cliente creado; `meta.warnings` solo si hay posibles duplicados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientCreateResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /clients/{id}:
+    get:
+      tags: [clientes]
+      summary: Detalle de un cliente
+      description: |
+        Requiere `clients.view`. Mismo recorte de campos que la lista. Si el
+        cliente no es visible, responde 404.
+      operationId: getClient
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      responses:
+        '200':
+          description: Cliente encontrado.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Client'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [clientes]
+      summary: Editar cliente
+      description: |
+        ADMIN (`clients.editAny`) puede editar todos los campos. El creador solo
+        puede corregir datos de contacto de sus propios registros
+        (`clients.editOwn`): `contact_name`, `phone`, `email`, `address` y
+        `representative_name`. Un colaborador no creador recibe 403. `type` solo
+        lo cambia ADMIN. `version` es obligatoria y una versión desactualizada
+        devuelve 409. Audita `CLIENT_UPDATE` con before/after de los campos
+        cambiados. Convertir BANDA → NORMAL con reservas futuras activas devuelve
+        `409 CLIENT_HAS_FUTURE_RESERVATIONS`.
+      operationId: updateClient
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientUpdate'
+      responses:
+        '200':
+          description: Cliente actualizado; `version` incrementada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Client'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /clients/{id}/deactivate:
+    post:
+      tags: [clientes]
+      summary: Desactivar cliente
+      description: |
+        Requiere `clients.deactivate` (solo ADMIN). Baja lógica: no borra ni
+        elimina historia. Si el cliente tiene reservas futuras activas responde
+        `409 CLIENT_HAS_FUTURE_RESERVATIONS`. Audita `CLIENT_DEACTIVATE`.
+      operationId: deactivateClient
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      responses:
+        '200':
+          description: Cliente desactivado (o ya estaba desactivado).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Client'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
 components:
   securitySchemes:
     cookieAuth:
@@ -72,6 +792,31 @@ components:
       description: Token opaco de dispositivo (Android). Sin JWT.
 
   schemas:
+    SessionEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [user, capabilities, must_change_password]
+          properties:
+            user: {$ref: '#/components/schemas/User'}
+            capabilities:
+              type: object
+              additionalProperties: {type: boolean}
+            must_change_password: {type: boolean}
+            tokens_revoked:
+              type: integer
+              description: Presente al cambiar la contraseña.
+    DeviceToken:
+      type: object
+      required: [id, name, created_at, last_used_at, expires_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: [string, 'null'], format: date-time}
+        expires_at: {type: [string, 'null'], format: date-time}
     Error:
       type: object
       required: [error, request_id]
@@ -94,7 +839,308 @@ components:
         request_id:
           type: string
 
+    PaginationMeta:
+      type: object
+      required: [total, limit, offset]
+      properties:
+        total:
+          type: integer
+          description: Total de filas que cumplen el filtro.
+        limit:
+          type: integer
+          description: Tamaño de página aplicado (máximo 100).
+        offset:
+          type: integer
+          description: Desplazamiento aplicado.
+
+    RoleRef:
+      type: object
+      required: [id, code, name]
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+          enum: [ADMINISTRADOR, LIDER_PROYECTO, COLABORADOR]
+        name:
+          type: string
+
+    User:
+      type: object
+      required: [id, name, email, role, active, must_change_password, version]
+      description: Cuenta serializada sin `password_hash` ni secretos.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: [string, 'null']
+        job_title:
+          type: [string, 'null']
+        timezone:
+          type: string
+          description: Zona IANA usada solo para presentación.
+        role:
+          $ref: '#/components/schemas/RoleRef'
+        avatar_url:
+          type: [string, 'null']
+        notification_prefs:
+          type: object
+          additionalProperties: true
+        active:
+          type: boolean
+        must_change_password:
+          type: boolean
+        last_login_at:
+          type: [string, 'null']
+          format: date-time
+        version:
+          type: string
+
+    UserDirectoryEntry:
+      type: object
+      required: [id, name, role]
+      description: Datos mínimos para asignaciones e invitaciones; solo activos.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        job_title:
+          type: [string, 'null']
+        role:
+          type: object
+          required: [code]
+          properties:
+            code:
+              type: string
+              enum: [ADMINISTRADOR, LIDER_PROYECTO, COLABORADOR]
+
+    UserCreate:
+      type: object
+      required: [name, email, password]
+      description: |
+        Indica `role` (código) o `role_id`. Un campo sensible desconocido se
+        rechaza con 422. La cuenta nace con `must_change_password = 1`.
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        email:
+          type: string
+          format: email
+          maxLength: 180
+        password:
+          type: string
+          minLength: 12
+          maxLength: 200
+        phone:
+          type: [string, 'null']
+          maxLength: 32
+        job_title:
+          type: [string, 'null']
+          maxLength: 120
+        timezone:
+          type: string
+          default: America/Mexico_City
+        role:
+          type: string
+          enum: [ADMINISTRADOR, LIDER_PROYECTO, COLABORADOR]
+        role_id:
+          type: string
+          pattern: '^[0-9]+$'
+
+    UserUpdate:
+      type: object
+      required: [version]
+      description: |
+        Solo estos campos son editables. `email`, `active`, `password` y
+        `password_hash` se rechazan con 422. El propio actor no puede cambiar su
+        rol (403).
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        phone:
+          type: [string, 'null']
+          maxLength: 32
+        job_title:
+          type: [string, 'null']
+          maxLength: 120
+        timezone:
+          type: string
+        role:
+          type: string
+          enum: [ADMINISTRADOR, LIDER_PROYECTO, COLABORADOR]
+        role_id:
+          type: string
+          pattern: '^[0-9]+$'
+        version:
+          type: string
+          pattern: '^[0-9]+$'
+
+    TemporaryPasswordResponse:
+      type: object
+      required: [user, temporary_password]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        temporary_password:
+          type: string
+          description: Clave temporal de un solo uso; se muestra solo en esta respuesta.
+
+    Client:
+      type: object
+      required: [id, type, name, active]
+      description: |
+        `representative_name`, `email`, `address`, `notes`, `created_by`,
+        `version`, `created_at` y `updated_at` solo aparecen si el actor es ADMIN
+        (`clients.viewSensitive`) o el creador del registro.
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [NORMAL, BANDA]
+        name:
+          type: string
+        contact_name:
+          type: [string, 'null']
+        phone:
+          type: [string, 'null']
+        active:
+          type: boolean
+        representative_name:
+          type: [string, 'null']
+        email:
+          type: [string, 'null']
+          format: email
+        address:
+          type: [string, 'null']
+        notes:
+          type: [string, 'null']
+        created_by:
+          type: [string, 'null']
+        version:
+          type: string
+        created_at:
+          type: [string, 'null']
+          format: date-time
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+
+    ClientCreate:
+      type: object
+      required: [name]
+      description: |
+        Una BANDA exige `representative_name` y `phone`. `type` vale NORMAL si se
+        omite. Los duplicados se advierten en `meta.warnings`, sin bloquear.
+      properties:
+        type:
+          type: string
+          enum: [NORMAL, BANDA]
+          default: NORMAL
+        name:
+          type: string
+          maxLength: 160
+        contact_name:
+          type: [string, 'null']
+          maxLength: 120
+        representative_name:
+          type: [string, 'null']
+          maxLength: 120
+        phone:
+          type: [string, 'null']
+          maxLength: 32
+        email:
+          type: [string, 'null']
+          format: email
+          maxLength: 180
+        address:
+          type: [string, 'null']
+          maxLength: 255
+        notes:
+          type: [string, 'null']
+          maxLength: 5000
+
+    ClientUpdate:
+      type: object
+      required: [version]
+      description: |
+        ADMIN edita todo. El creador solo `contact_name`, `phone`, `email`,
+        `address` y `representative_name` de sus registros. `type` es exclusivo
+        de ADMIN. `active`, `created_by`, `id` y fechas se rechazan con 422.
+      properties:
+        type:
+          type: string
+          enum: [NORMAL, BANDA]
+        name:
+          type: string
+          maxLength: 160
+        contact_name:
+          type: [string, 'null']
+          maxLength: 120
+        representative_name:
+          type: [string, 'null']
+          maxLength: 120
+        phone:
+          type: [string, 'null']
+          maxLength: 32
+        email:
+          type: [string, 'null']
+          format: email
+          maxLength: 180
+        address:
+          type: [string, 'null']
+          maxLength: 255
+        notes:
+          type: [string, 'null']
+          maxLength: 5000
+        version:
+          type: string
+          pattern: '^[0-9]+$'
+
+    DuplicateWarning:
+      type: object
+      required: [id, name, matched_by]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        matched_by:
+          type: array
+          items:
+            type: string
+            enum: [name, phone, email]
+
+    ClientCreateResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/Client'
+        meta:
+          type: object
+          properties:
+            warnings:
+              type: array
+              description: Posibles duplicados; se omite si no hay ninguno.
+              items:
+                $ref: '#/components/schemas/DuplicateWarning'
+
   parameters:
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: false
+      description: Obligatorio en TODA escritura con cookie (incluido login); no con Bearer válido.
+      schema: {type: string}
     Limit:
       name: limit
       in: query
@@ -124,3 +1170,106 @@ components:
       schema:
         type: string
         description: Versión esperada entre comillas, por ejemplo "3".
+    UserId:
+      name: id
+      in: path
+      required: true
+      description: Identificador de la cuenta.
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+    ClientId:
+      name: id
+      in: path
+      required: true
+      description: Identificador del cliente.
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+
+  responses:
+    Session:
+      description: Perfil propio sin secretos y capacidades informativas; el backend reautoriza siempre.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/SessionEnvelope'}
+    InvalidCredentials:
+      description: INVALID_CREDENTIALS genérico, sin revelar si la cuenta existe o está activa.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    AccessForbidden:
+      description: CSRF_INVALID, PASSWORD_CHANGE_REQUIRED o FORBIDDEN según el caso.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    RateLimited:
+      description: RATE_LIMITED por cuenta o IP, con Retry-After en segundos.
+      headers:
+        Retry-After:
+          schema: {type: integer}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthenticated:
+      description: Sin sesión ni token válido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: UNAUTHENTICATED
+              message: Necesitas iniciar sesión.
+            request_id: 3f9c2a1b7d8e4f60
+    Forbidden:
+      description: El rol o el objeto no autorizan la acción.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: FORBIDDEN
+              message: No tienes permiso para esta acción.
+            request_id: 3f9c2a1b7d8e4f60
+    NotFound:
+      description: El recurso no existe o no es visible para el actor.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: NOT_FOUND
+              message: No encontrado.
+            request_id: 3f9c2a1b7d8e4f60
+    Conflict:
+      description: |
+        Conflicto de negocio o de concurrencia. Códigos estables:
+        `VERSION_CONFLICT`, `EMAIL_TAKEN`, `LAST_ADMIN_PROTECTED`,
+        `CLIENT_HAS_FUTURE_RESERVATIONS`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: VERSION_CONFLICT
+              message: El registro cambió mientras lo editabas.
+              fields:
+                version: La versión enviada ya no es la actual.
+            request_id: 3f9c2a1b7d8e4f60
+    ValidationFailed:
+      description: Uno o más campos no cumplen la lista blanca o el formato.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: VALIDATION_FAILED
+              message: Revisa los datos enviados.
+              fields:
+                email: El correo es obligatorio y debe ser una dirección válida.
+            request_id: 3f9c2a1b7d8e4f60

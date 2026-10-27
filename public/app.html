@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#10233f">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+    <title>Gestión del estudio</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
+    <link rel="stylesheet" href="/assets/css/base.css">
+    <link rel="stylesheet" href="/assets/css/app.css">
+    <link rel="stylesheet" href="/assets/css/print.css" media="print">
+</head>
+<body>
+    <a class="skip-link" href="#app">Saltar al contenido principal</a>
+    <header class="app-header">
+        <div class="app-header-bar">
+            <a class="app-brand" href="#/inicio">
+                <span class="app-brand-mark" aria-hidden="true">♪</span>
+                <span>Gestión del estudio</span>
+            </a>
+            <div class="session-bar" id="session-bar" hidden></div>
+        </div>
+        <nav class="app-nav" id="main-nav" aria-label="Navegación principal" hidden></nav>
+    </header>
+    <main class="app-main" id="app" tabindex="-1">
+        <p class="boot-message">Cargando la aplicación…</p>
+    </main>
+    <footer class="app-footer"><p>Sistema privado de gestión del estudio</p></footer>
+    <noscript><p role="alert">Necesitas activar JavaScript para usar esta aplicación.</p></noscript>
+    <script type="module" src="/assets/js/app.js"></script>
+</body>
+</html>

@@ -16,6 +16,9 @@ permissions:
     resource: "config/config.example.php"
     effect: allow
   - action: edit
+    resource: "docs/openapi.yaml"
+    effect: allow
+  - action: edit
     resource: "src/Auth/**"
     effect: deny
   - action: edit

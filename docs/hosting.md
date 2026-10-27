@@ -7,6 +7,21 @@ Proveedor: _pendiente_
 Panel: _pendiente_
 Fecha del inventario: _pendiente_
 
+## Entorno local verificado (NO sustituye el hosting)
+
+Verificado el 2026-10-27 en Windows:
+
+- PHP 8.4.27 portable; Composer 2.10.3; `composer check-platform-reqs` correcto,
+  incluidas `gd`, `bcmath`, `pdo_mysql` y las extensiones XML/ZIP.
+- MariaDB 10.4.32: 34 tablas InnoDB, FK y CHECK aplicadas, conexión en UTC y modo estricto.
+- Servidor de desarrollo PHP en `127.0.0.1:8080`, raíz `public/`. No es Apache ni producción.
+- PHPUnit utiliza exclusivamente `gestion_test`; HTTP y navegador usan servidores locales
+  con puertos efímeros. No se modifican los secretos de `config/config.php`.
+- Cookies sin Secure solo para HTTP local; en producción se exige HTTPS y Secure.
+
+La tabla siguiente sigue vacía intencionalmente: no se conocen las capacidades reales del
+proveedor. Ni las pruebas locales ni el lockfile certifican compatibilidad con ese hosting.
+
 ## PHP
 
 | Dato | Valor real | Requerido | Estado |
