@@ -19,7 +19,7 @@ Cada fase termina con: pruebas en verde, `docs/fases.md` actualizado, commit y `
 - [x] `AGENTS.md` con stack, invariantes y flujo de trabajo.
 - [x] `opencode.jsonc` con permisos de edición.
 - [x] 7 agentes en `.opencode/agents/`.
-- [x] 11 skills en `.opencode/skills/`.
+- [x] 12 skills en `.opencode/skills/`.
 - [x] Especificación versionada en `docs/requerimiento-v1.0.md`.
 - [x] Registro de decisiones `docs/decisiones.md`.
 - [x] Contrato móvil `docs/api-movil.md`.
