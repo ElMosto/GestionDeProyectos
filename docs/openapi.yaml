@@ -1,0 +1,126 @@
+openapi: 3.1.0
+info:
+  title: Gestión de Proyectos — Estudio Musical
+  version: 0.1.0
+  description: |
+    API del sistema de gestión del estudio musical.
+
+    Estado: esqueleto (fase 0). Solo existe `/health`; el resto se añade en las fases 1-6.
+
+    Convenciones vinculantes (ver `docs/api-movil.md`):
+    - Importes y cantidades como **string** decimal.
+    - IDs como **string**.
+    - Fechas ISO 8601 con zona; se almacenan en UTC.
+    - Éxito: `{data, meta}`. Error: `{error:{code,message,fields},request_id}`.
+    - Escrituras con `Idempotency-Key` cuando crean dinero o bloquean espacio.
+    - Ediciones con `If-Match` / `expected_version`.
+
+servers:
+  - url: /api/v1
+    description: Misma procedencia que el frontend
+
+security:
+  - cookieAuth: []
+  - bearerAuth: []
+
+tags:
+  - name: sistema
+    description: Estado del servicio
+
+paths:
+  /health:
+    get:
+      tags: [sistema]
+      summary: Estado del servicio
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Servicio operativo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [status, time]
+                    properties:
+                      status:
+                        type: string
+                        const: ok
+                      time:
+                        type: string
+                        format: date-time
+                  meta:
+                    type: object
+                    properties:
+                      request_id:
+                        type: string
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: gestion_session
+      description: Sesión web. Requiere token CSRF en operaciones mutables.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token opaco de dispositivo (Android). Sin JWT.
+
+  schemas:
+    Error:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Código estable en inglés, para ramificar en el cliente.
+              examples: [VALIDATION_FAILED, FORBIDDEN, VERSION_CONFLICT]
+            message:
+              type: string
+              description: Mensaje para el usuario final, en español.
+            fields:
+              type: object
+              additionalProperties:
+                type: string
+        request_id:
+          type: string
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 64
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+        description: Versión esperada entre comillas, por ejemplo "3".
