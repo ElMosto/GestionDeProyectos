@@ -25,6 +25,7 @@ final class TaskService
         private readonly Database $db,
         private readonly Authorizer $authorizer,
         private readonly ProjectAudit $audit,
+        private readonly NotificationService $notifications,
     ) {
     }
 
@@ -104,6 +105,7 @@ final class TaskService
                 $this->projects->bump((int) $project['id']);
             }
             $this->audit->record('TASK_CREATE', 'task', $id, null, $fields);
+            $this->notifications->notify([(int) $fields['assignee_id']], 'TASK_ASSIGNED', 'task', $id);
             return $this->show($id);
         });
     }
@@ -130,6 +132,11 @@ final class TaskService
                 $this->projects->bump((int) $project['id']);
             }
             $this->audit->record('TASK_UPDATE', 'task', $id, array_intersect_key($task, $fields), $fields);
+            $reassigned = (string) $merged['assignee_id'] !== (string) $task['assignee_id'];
+            $this->notifications->notify(
+                [(int) $task['assignee_id'], (int) $merged['assignee_id']],
+                $reassigned ? 'TASK_REASSIGNED' : 'TASK_CHANGED', 'task', $id,
+            );
             return $this->show($id);
         });
     }
@@ -175,6 +182,7 @@ final class TaskService
             }
             $this->audit->record($terminal ? 'TASK_REOPEN' : 'TASK_TRANSITION', 'task', $id,
                 ['status' => $task['status'], 'progress' => $task['progress']], $input + ['progress' => $progress]);
+            $this->notifications->notify([(int) $task['assignee_id']], $target === 'CANCELADA' ? 'TASK_CANCELLED' : 'TASK_CHANGED', 'task', $id);
             return $this->show($id);
         });
     }

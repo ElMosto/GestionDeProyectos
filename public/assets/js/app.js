@@ -45,6 +45,9 @@ import { renderVenta } from './views/venta.js';
 import { renderEspacios } from './views/espacios.js';
 import { renderReservas } from './views/reservas.js';
 import { renderReserva } from './views/reserva.js';
+import { renderReuniones } from './views/reuniones.js';
+import { renderReunion } from './views/reunion.js';
+import { renderNotificaciones } from './views/notificaciones.js';
 
 const ROUTES = {
     '/inicio': { title: 'Inicio', render: renderInicio },
@@ -58,6 +61,8 @@ const ROUTES = {
     '/ventas': { title: 'Ventas', render: renderVentas },
     '/espacios': { title: 'Espacios', render: renderEspacios },
     '/reservas': { title: 'Reservas', render: renderReservas },
+    '/reuniones': { title: 'Mis reuniones', render: renderReuniones },
+    '/notificaciones': { title: 'Mis notificaciones', render: renderNotificaciones },
 };
 
 const appRoot = document.getElementById('app');
@@ -66,6 +71,14 @@ const sessionRoot = document.getElementById('session-bar');
 
 /** @type {{user: any, capabilities: Record<string, boolean>, mustChangePassword: boolean}|null} */
 let session = null;
+let viewCleanups = [];
+let renderSequence = 0;
+
+function cleanupView() {
+    const callbacks = viewCleanups;
+    viewCleanups = [];
+    callbacks.forEach((cleanup) => cleanup());
+}
 
 /**
  * @returns {string}
@@ -174,6 +187,8 @@ function renderChrome() {
         { path: '/proyectos', label: 'Proyectos', allowed: ['projects.viewAny', 'projects.viewOwn', 'projects.viewMember'].some((key) => session.capabilities[key] === true) },
         { path: '/mis-tareas', label: 'Mis tareas', capability: 'tasks.updateAssigned' },
         { path: '/agenda', label: 'Agenda', capability: 'agenda.viewOwn' },
+        { path: '/reuniones', label: 'Mis reuniones', allowed: ['meetings.create', 'meetings.respond'].some((key) => session.capabilities[key] === true) },
+        { path: '/notificaciones', label: 'Notificaciones', capability: 'notifications.viewOwn' },
         { path: '/clientes', label: 'Clientes', capability: 'clients.view' },
         { path: '/ventas', label: 'Ventas', capability: 'sales.viewOwn' },
         { path: '/reservas', label: 'Reservas', capability: 'reservations.viewOwn' },
@@ -189,7 +204,7 @@ function renderChrome() {
         el('a', {
             class: 'nav-link',
             href: `#${item.path}`,
-            'aria-current': activePath === item.path || (item.path === '/proyectos' && /^\/proyectos\/[1-9]\d*$/.test(activePath)) || (item.path === '/ventas' && /^\/ventas\/[1-9]\d*$/.test(activePath)) || (item.path === '/reservas' && /^\/reservas\/[1-9]\d*$/.test(activePath)) ? 'page' : null,
+            'aria-current': activePath === item.path || (item.path === '/proyectos' && /^\/proyectos\/[1-9]\d*$/.test(activePath)) || (item.path === '/ventas' && /^\/ventas\/[1-9]\d*$/.test(activePath)) || (item.path === '/reservas' && /^\/reservas\/[1-9]\d*$/.test(activePath)) || (item.path === '/reuniones' && /^\/reuniones\/[1-9]\d*$/.test(activePath)) ? 'page' : null,
         }, item.label),
     ))));
 
@@ -248,6 +263,8 @@ async function render() {
         return;
     }
 
+    cleanupView();
+    const renderTicket = ++renderSequence;
     renderChrome();
 
     if (!session) {
@@ -280,9 +297,11 @@ async function render() {
     const projectMatch = /^\/proyectos\/([1-9]\d*)$/.exec(path);
     const saleMatch = /^\/ventas\/([1-9]\d*)$/.exec(path);
     const reservationMatch = /^\/reservas\/([1-9]\d*)$/.exec(path);
+    const meetingMatch = /^\/reuniones\/([1-9]\d*)$/.exec(path);
     const route = projectMatch ? { title: 'Proyecto', render: (root, context) => renderProyecto(root, context, projectMatch[1]) }
         : saleMatch ? { title: 'Venta', render: (root, context) => renderVenta(root, context, saleMatch[1]) }
-            : reservationMatch ? { title: 'Reserva', render: (root, context) => renderReserva(root, context, reservationMatch[1]) } : ROUTES[path];
+            : reservationMatch ? { title: 'Reserva', render: (root, context) => renderReserva(root, context, reservationMatch[1]) }
+                : meetingMatch ? { title: 'Reunión', render: (root, context) => renderReunion(root, context, meetingMatch[1]) } : ROUTES[path];
 
     if (!route) {
         setTitle('Página no encontrada');
@@ -301,10 +320,18 @@ async function render() {
         // tarde solo actualiza su nodo ya desconectado, nunca la vista nueva.
         const viewRoot = el('div');
         mount(appRoot, viewRoot);
-        await route.render(viewRoot, ctx);
+        const viewContext = Object.create(ctx);
+        viewContext.onCleanup = (cleanup) => {
+            if (renderTicket === renderSequence) viewCleanups.push(cleanup);
+            else cleanup();
+        };
+        await route.render(viewRoot, viewContext);
+        if (renderTicket !== renderSequence) return;
         setTitle(route.title);
         focusHeading();
     } catch (error) {
+        if (renderTicket !== renderSequence) return;
+        cleanupView();
         setTitle('Error');
         mount(appRoot, errorState({
             error: asApiError(error),

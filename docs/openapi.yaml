@@ -1,15 +1,15 @@
 openapi: 3.1.0
 info:
   title: Gestión de Proyectos — Estudio Musical
-  version: 0.6.0
+  version: 0.7.0
   description: |
     API del sistema de gestión del estudio musical.
 
-    Estado: fases 1-4. Autenticación, perfil, usuarios, clientes, proyectos,
+    Estado: fases 1-5. Autenticación, perfil, usuarios, clientes, proyectos,
     etapas, membresías, tareas, cargos, agenda propia de tareas, catálogos,
     ventas, pagos, anulaciones, reembolsos, ticket de venta, espacios, horarios,
-    reservas, bloqueos y agenda propia de reservas.
-    Reuniones, dashboard y gastos quedan para fases posteriores.
+    reservas, bloqueos, reuniones, invitaciones individuales, notificaciones y
+    proyecciones propias de agenda. Dashboard y gastos quedan para fase posterior.
 
     Convenciones vinculantes (ver `docs/api-movil.md`):
     - Importes y cantidades como **string** decimal.
@@ -50,7 +50,11 @@ tags:
   - name: tareas
     description: Tareas de proyecto, independientes y comentarios (§8)
   - name: agenda
-    description: Proyecciones propias paginadas; /agenda conserva tareas y /agenda/reservations añade reservas (§13)
+    description: Proyecciones propias paginadas; /agenda conserva tareas, /agenda/reservations y /agenda/meetings son aditivas (§13)
+  - name: reuniones
+    description: Reuniones privadas e invitaciones individuales; ADMIN no obtiene acceso global (§13, D-24/D-25)
+  - name: notificaciones
+    description: Bandeja propia persistida con contenido genérico, sin permisos implícitos sobre el recurso (§13)
   - name: catalogo
     description: Productos y extras; lectura autenticada, gestión solo ADMIN (§10)
   - name: ventas
@@ -2377,6 +2381,233 @@ paths:
         '403': {$ref: '#/components/responses/AccessForbidden'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
 
+  /meetings:
+    get:
+      tags: [reuniones]
+      operationId: listMeetings
+      summary: Reuniones organizadas e invitaciones propias
+      description: |
+        Solo propias como organizador o invitado, también para ADMIN. Incluye
+        invitaciones PENDIENTE/RECHAZADA y reuniones canceladas; no es el calendario.
+        Únicos parámetros implementados limit y offset; sin filtros de terceros.
+        La proyección de cada fila depende de la participación actual del actor.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/MeetingPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [reuniones]
+      operationId: createMeeting
+      summary: Crear reunión e invitaciones a cuentas activas
+      description: |
+        Cualquier cuenta activa; organizador siempre el actor, no un ID del cuerpo.
+        Invitados internos activos, únicos y distintos del organizador; no clientes.
+        Sin espacio, cruces personales propios requieren acknowledge_conflicts:true;
+        sin ello 409 CONFLICTS_REQUIRE_ACK, sin detalles de actividades ajenas.
+        Con espacio, exclusión transaccional de todas las ocupaciones mediante
+        SpaceOccupancyService; RESERVATION_CONFLICT nunca es sobreescribible.
+        Duración positiva, máximo 31 días; sin espacio no se fuerza granularidad.
+        Crea avisos genéricos en la misma transacción, sin venta ni efecto financiero.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/MeetingIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MeetingCreate'}
+            example:
+              title: Reunión de coordinación
+              start_at: '2026-11-02T10:00:00-06:00'
+              end_at: '2026-11-02T11:00:00-06:00'
+              invited_user_ids: ['7']
+      responses:
+        '201': {$ref: '#/components/responses/MeetingResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/MeetingConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /meetings/{id}:
+    parameters:
+      - $ref: '#/components/parameters/MeetingId'
+    get:
+      tags: [reuniones]
+      operationId: getMeeting
+      summary: Detalle privado según participación actual
+      description: |
+        Solo organizador o invitado; ADMIN ajeno no tiene excepción. Pendiente o
+        rechazado recibe invitación mínima; aceptado recibe descripción/lugar/espacio,
+        nunca la lista ni las respuestas de otros. Solo organizador recibe invitations
+        en detalle (no en listado).
+        Mismo recorte con sesión y token opaco. ID invisible devuelve 404 NOT_FOUND.
+      responses:
+        '200': {$ref: '#/components/responses/MeetingResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [reuniones]
+      operationId: updateMeeting
+      summary: Editar o reprogramar una reunión propia
+      description: |
+        Solo organizador, estado PROGRAMADA. Versión de reunión obligatoria mediante
+        version, expected_version o If-Match; si se combinan deben coincidir.
+        Omisiones conservan valor; space_id:null libera ocupación. Rechaza invitados,
+        organizer_id, status, occupancy_id y campos desconocidos.
+        Cambiar inicio O fin normalizado a UTC restablece TODAS las invitaciones a
+        PENDIENTE, limpia responded_at e incrementa sus versiones, incluso rechazadas.
+        Ya no aparecen en agenda invitada hasta reaceptación. Cambiar solo lugar,
+        modalidad, espacio, título o descripción conserva las respuestas.
+        Conflicto personal requiere confirmación; conflicto de estudio no se omite.
+        Auditoría, avisos y sincronización de ocupación en una sola transacción.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/MeetingIdempotencyKey'
+        - $ref: '#/components/parameters/MeetingIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MeetingUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/MeetingResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/MeetingConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /meetings/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/MeetingId'
+    post:
+      tags: [reuniones]
+      operationId: cancelMeeting
+      summary: Cancelar reunión propia preservando historial
+      description: |
+        Solo organizador, sin excepción ADMIN. Exige versión de reunión y motivo;
+        cambia PROGRAMADA a CANCELADA y libera ocupación, conserva invitaciones.
+        Sin anulación de ventas, reembolso ni efecto financiero. Motivo auditado,
+        no copiado a notificaciones. Replay idempotente reautoriza acceso actual.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/MeetingIdempotencyKey'
+        - $ref: '#/components/parameters/MeetingIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MeetingCancel'}
+      responses:
+        '200': {$ref: '#/components/responses/MeetingResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/MeetingConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /meetings/{id}/response:
+    parameters:
+      - $ref: '#/components/parameters/MeetingId'
+    post:
+      tags: [reuniones]
+      operationId: respondToMeeting
+      summary: Aceptar o rechazar la invitación propia
+      description: |
+        Solo invitado propio, nunca en nombre de otro ni por privilegio ADMIN.
+        ACCEPTED/DECLINED se normalizan a ACEPTADA/RECHAZADA. No responde por otros
+        ni cancela reunión. Exige versión de INVITACIÓN, no de reunión; después de
+        reprogramar, una respuesta con versión antigua da 409 VERSION_CONFLICT.
+        Solo PROGRAMADA. Aceptar cruce personal exige acknowledge_conflicts:true;
+        no se devuelven detalles privados de los conflictos. Devuelve reunión
+        recortada y solo invitation propia. Todas las escrituras exigen Key.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/MeetingIdempotencyKey'
+        - $ref: '#/components/parameters/MeetingIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MeetingResponseInput'}
+            example: {response: ACCEPTED, version: '2', acknowledge_conflicts: true}
+      responses:
+        '200': {$ref: '#/components/responses/MeetingResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/MeetingConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /agenda/meetings:
+    get:
+      tags: [agenda]
+      operationId: getOwnMeetingAgenda
+      summary: Agenda privada de reuniones organizadas o aceptadas
+      description: |
+        Solo PROGRAMADA y actor organizador o invitado ACEPTADA, incluso ADMIN.
+        Pendientes/rechazadas nunca son eventos. from/to DATE inclusivos en zona
+        personal del usuario, máximo 31 días; intervalos de evento [inicio,fin).
+        Proyección mínima sin listas de invitados, respuestas ni datos financieros.
+        No altera /agenda TASK/TASKS_PHASE_2 ni /agenda/reservations; la UI combina
+        explícitamente páginas. Parámetros implementados from, to, limit, offset.
+      parameters:
+        - $ref: '#/components/parameters/MeetingAgendaFrom'
+        - $ref: '#/components/parameters/MeetingAgendaTo'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/MeetingAgendaPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /notifications:
+    get:
+      tags: [notificaciones]
+      operationId: listOwnNotifications
+      summary: Bandeja paginada y contador global propios
+      description: |
+        Solo user_id del actor, también ADMIN. unread=1 solo no leídas; unread=0
+        u omitido incluye ambas. meta.unread_count es el total global
+        propio no leído, no el tamaño de página ni el total filtrado.
+        Payload genérico regenerado desde plantillas, sin títulos, notas, enlaces
+        privados, dinero ni snapshots del objeto. entity_type/entity_id y action
+        son informativos, nunca autorización; el destino reautoriza el recurso.
+        El frontend valida action contra lista blanca de rutas internas.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: unread
+          in: query
+          description: '1 filtra no leídas; 0 u omitido incluye leídas y no leídas.'
+          schema: {type: string, enum: ['0', '1']}
+      responses:
+        '200': {$ref: '#/components/responses/NotificationPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /notifications/{id}/read:
+    parameters:
+      - $ref: '#/components/parameters/NotificationId'
+    post:
+      tags: [notificaciones]
+      operationId: markOwnNotificationRead
+      summary: Marcar aviso propio como leído idempotentemente
+      description: |
+        Cuerpo vacío; no requiere Idempotency-Key ni versión (tabla sin version).
+        Conserva el primer read_at. ID ajeno devuelve 404 también para ADMIN.
+        No acepta invitaciones ni concede acceso al recurso enlazado.
+        Con cookie exige CSRF; Bearer opaco válido no requiere CSRF.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200': {$ref: '#/components/responses/NotificationResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
 components:
   securitySchemes:
     cookieAuth:
@@ -2390,6 +2621,205 @@ components:
       description: Token opaco de dispositivo (Android). Sin JWT.
 
   schemas:
+    MeetingInstant:
+      type: string
+      format: date-time
+      pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$'
+      description: ISO 8601 con segundos y zona obligatoria; entrada con offset o Z, salida UTC Z.
+      examples: ['2026-11-02T16:00:00Z']
+    MeetingFields:
+      type: object
+      properties:
+        title: {type: string, minLength: 1, maxLength: 160}
+        description: {type: [string, 'null'], maxLength: 10000}
+        start_at: {$ref: '#/components/schemas/MeetingInstant'}
+        end_at: {$ref: '#/components/schemas/MeetingInstant'}
+        modality: {type: string, enum: [PRESENCIAL, VIRTUAL, HIBRIDA], default: PRESENCIAL}
+        location:
+          type: [string, 'null']
+          maxLength: 200
+          description: Texto no confiable; no URL autorizada para navegar o insertar HTML.
+        space_id:
+          oneOf:
+            - $ref: '#/components/schemas/ProjectId'
+            - {type: 'null'}
+        acknowledge_conflicts: {type: boolean, default: false}
+    MeetingCreate:
+      allOf:
+        - $ref: '#/components/schemas/MeetingFields'
+        - type: object
+          properties:
+            invited_user_ids:
+              type: array
+              uniqueItems: true
+              items: {$ref: '#/components/schemas/ProjectId'}
+              description: Fijados al crear; cuentas internas activas, sin actor ni clientes. Admite lista vacía.
+      required: [title, start_at, end_at, invited_user_ids]
+      unevaluatedProperties: false
+    MeetingUpdate:
+      allOf:
+        - $ref: '#/components/schemas/MeetingFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+      description: Al menos un campo editable; versión de reunión por cuerpo o If-Match. invited_user_ids prohibido.
+      unevaluatedProperties: false
+    MeetingCancel:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          properties:
+            reason: {type: string, minLength: 1, maxLength: 255}
+      required: [reason]
+      unevaluatedProperties: false
+    MeetingResponseInput:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          properties:
+            response: {type: string, enum: [ACCEPTED, DECLINED, ACEPTADA, RECHAZADA]}
+            acknowledge_conflicts: {type: boolean, default: false}
+      required: [response]
+      description: Versión de invitación obligatoria por cuerpo o If-Match, nunca versión de reunión.
+      unevaluatedProperties: false
+    MeetingPerson:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        name: {type: string}
+    MeetingInvitation:
+      type: object
+      required: [id, response, version, responded_at]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        response: {type: string, enum: [PENDIENTE, ACEPTADA, RECHAZADA]}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        responded_at:
+          oneOf:
+            - $ref: '#/components/schemas/MeetingInstant'
+            - {type: 'null'}
+    MeetingBase:
+      type: object
+      required: [id, title, start_at, end_at, modality, status, version, organizer]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        title: {type: string}
+        start_at: {$ref: '#/components/schemas/MeetingInstant'}
+        end_at: {$ref: '#/components/schemas/MeetingInstant'}
+        modality: {type: string, enum: [PRESENCIAL, VIRTUAL, HIBRIDA]}
+        status: {type: string, enum: [PROGRAMADA, CANCELADA, FINALIZADA]}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        organizer: {$ref: '#/components/schemas/MeetingPerson'}
+    MeetingVisibleDetails:
+      type: object
+      properties:
+        description: {type: [string, 'null']}
+        location: {type: [string, 'null'], description: 'Texto no confiable, no URL de confianza.'}
+        space_id:
+          oneOf:
+            - $ref: '#/components/schemas/ProjectId'
+            - {type: 'null'}
+    Meeting:
+      description: |
+        Unión de proyecciones exclusivas. Solo organizador recibe invitations en detalle;
+        el listado de organizador no incluye esa colección.
+        invitado solo invitation propia. Pendiente/rechazado no recibe detalles,
+        espacio ni lista ajena. Sin email, private_notes, occupancy ni dinero.
+      oneOf:
+        - allOf:
+            - $ref: '#/components/schemas/MeetingBase'
+            - $ref: '#/components/schemas/MeetingVisibleDetails'
+            - type: object
+              properties:
+                invitations:
+                  type: array
+                  items:
+                    allOf:
+                      - $ref: '#/components/schemas/MeetingInvitation'
+                      - type: object
+                        required: [invitee]
+                        properties:
+                          invitee: {$ref: '#/components/schemas/MeetingPerson'}
+                    unevaluatedProperties: false
+          unevaluatedProperties: false
+        - allOf:
+            - $ref: '#/components/schemas/MeetingBase'
+            - $ref: '#/components/schemas/MeetingVisibleDetails'
+            - type: object
+              required: [invitation]
+              properties:
+                invitation:
+                  allOf:
+                    - $ref: '#/components/schemas/MeetingInvitation'
+                    - type: object
+                      properties:
+                        response: {const: ACEPTADA}
+                  unevaluatedProperties: false
+          unevaluatedProperties: false
+        - allOf:
+            - $ref: '#/components/schemas/MeetingBase'
+            - type: object
+              required: [invitation]
+              properties:
+                invitation:
+                  allOf:
+                    - $ref: '#/components/schemas/MeetingInvitation'
+                    - type: object
+                      properties:
+                        response: {enum: [PENDIENTE, RECHAZADA]}
+                  unevaluatedProperties: false
+          unevaluatedProperties: false
+    MeetingAgendaEntry:
+      type: object
+      additionalProperties: false
+      required: [kind, id, title, start_at, end_at, status, modality, location]
+      properties:
+        kind: {type: string, const: MEETING}
+        id: {$ref: '#/components/schemas/ProjectId'}
+        title: {type: string}
+        start_at: {$ref: '#/components/schemas/MeetingInstant'}
+        end_at: {$ref: '#/components/schemas/MeetingInstant'}
+        status: {type: string, const: PROGRAMADA}
+        modality: {type: string, enum: [PRESENCIAL, VIRTUAL, HIBRIDA]}
+        location: {type: [string, 'null']}
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, type, entity_type, entity_id, payload, read_at, created_at]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        type:
+          type: string
+          description: |
+            Tipos emitidos MEETING_INVITED, MEETING_CHANGED, MEETING_CANCELLED,
+            MEETING_RESPONDED, TASK_ASSIGNED, TASK_REASSIGNED, TASK_CHANGED,
+            TASK_CANCELLED, RESERVATION_CREATED, RESERVATION_CHANGED,
+            RESERVATION_CANCELLED. Tipos históricos desconocidos conservan type
+            con payload genérico y action /notifications; no confiar en snapshots.
+        entity_type: {type: [string, 'null'], description: 'Referencia informativa, no autorización.'}
+        entity_id:
+          oneOf:
+            - $ref: '#/components/schemas/ProjectId'
+            - {type: 'null'}
+        payload:
+          type: object
+          additionalProperties: false
+          required: [message, action]
+          properties:
+            message: {type: string, description: Mensaje genérico de plantilla sin título ni contenido del objeto.}
+            action: {type: [string, 'null'], description: Ruta interna de lista blanca o null; destino reautoriza.}
+        read_at:
+          oneOf:
+            - $ref: '#/components/schemas/MeetingInstant'
+            - {type: 'null'}
+        created_at: {$ref: '#/components/schemas/MeetingInstant'}
+    NotificationMeta:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required: [unread_count]
+          properties:
+            unread_count: {type: integer, minimum: 0, description: 'Total global propio no leído, independiente de página/filtro.'}
     SpaceFields:
       type: object
       properties:
@@ -3661,6 +4091,51 @@ components:
                 $ref: '#/components/schemas/DuplicateWarning'
 
   parameters:
+    MeetingId:
+      name: id
+      in: path
+      required: true
+      description: Identificador de reunión; conocerlo no concede acceso.
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    NotificationId:
+      name: id
+      in: path
+      required: true
+      description: Identificador de aviso propio.
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    MeetingIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Todas las escrituras de reuniones, incluidas cancelación y respuesta,
+        con o sin espacio. Replay reautoriza representación actual y no duplica
+        ocupaciones ni avisos. Misma clave con otra petición da IDEMPOTENCY_KEY_REUSED.
+      schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[!-~]+$'}
+      example: reunion-20261102-001
+    MeetingIfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        Alternativa a version/expected_version del cuerpo; al menos una obligatoria,
+        varias deben coincidir. Versión de reunión salvo /response (invitación).
+      schema: {type: string, pattern: '^"[1-9][0-9]*"$'}
+      example: '"2"'
+    MeetingAgendaFrom:
+      name: from
+      in: query
+      required: true
+      description: Primer día civil inclusivo en zona personal del usuario.
+      schema: {type: string, format: date}
+      example: '2026-11-01'
+    MeetingAgendaTo:
+      name: to
+      in: query
+      required: true
+      description: Último día civil inclusivo; máximo 31 días de rango.
+      schema: {type: string, format: date}
+      example: '2026-11-07'
     ReservationIdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -3864,6 +4339,72 @@ components:
         pattern: '^[0-9]+$'
 
   responses:
+    MeetingResource:
+      description: Reunión autorizada con proyección según actor y respuesta vigente; misma privacidad en replay.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Meeting'}
+    MeetingPage:
+      description: Página propia organizada o invitada, incluidas solicitudes pendientes y rechazadas.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/Meeting'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+    MeetingAgendaPage:
+      description: Eventos propios organizados o aceptados, sin cancelados ni solicitudes pendientes.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/MeetingAgendaEntry'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+          example:
+            data: [{kind: MEETING, id: '3', title: Reunión, start_at: '2026-11-02T16:00:00Z', end_at: '2026-11-02T17:00:00Z', status: PROGRAMADA, modality: PRESENCIAL, location: null}]
+            meta: {total: 1, limit: 25, offset: 0}
+    MeetingConflict:
+      description: |
+        Códigos estables VERSION_CONFLICT (reunión o invitación obsoleta),
+        INVALID_STATE (no PROGRAMADA), IDEMPOTENCY_KEY_REUSED (otra petición),
+        CONFLICTS_REQUIRE_ACK (cruce personal; confirmar explícitamente),
+        RESERVATION_CONFLICT (espacio ocupado; nunca se omite), SPACE_INACTIVE.
+        Sin actividades, IDs, títulos ni contenido privado de terceros.
+        Campos desconocidos, versión ausente/incoherente, Key ausente y fechas
+        inválidas producen 422 VALIDATION_FAILED; invisibles 404 NOT_FOUND.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example:
+            error: {code: CONFLICTS_REQUIRE_ACK, message: Confirma el cruce con tus actividades., fields: {}}
+            request_id: meeting-conflict-example
+    NotificationResource:
+      description: Aviso propio con primer read_at conservado; sin versión.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Notification'}
+    NotificationPage:
+      description: Página de avisos propios genéricos y contador global no leído.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/Notification'}}
+              meta: {$ref: '#/components/schemas/NotificationMeta'}
     SpaceResource:
       description: Espacio con ventanas semanales; tarifa solo ADMIN.
       content:

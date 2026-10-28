@@ -31,6 +31,9 @@ permissions:
     resource: "docs/api-reservas.md"
     effect: allow
   - action: edit
+    resource: "docs/api-reuniones.md"
+    effect: allow
+  - action: edit
     resource: "src/Auth/**"
     effect: deny
   - action: edit

@@ -349,6 +349,74 @@ final class Authorizer
             && $this->can(Capabilities::SPACES_MANAGE);
     }
 
+    /**
+     * §13, §16, D-25: organizador o invitado, nunca acceso global por ser ADMIN.
+     * Fila confiable del repositorio; `is_invited` debe ser true booleano calculado
+     * por SQL para este actor, nunca un dato del payload. Pendientes/rechazadas
+     * solo reciben el detalle mínimo de invitación mediante el serializador.
+     * @param array<string, mixed>|null $meeting
+     */
+    public function canViewMeeting(?array $meeting): bool
+    {
+        return $this->hasActiveActor()
+            && $meeting !== null
+            && $this->can(Capabilities::MEETINGS_CREATE)
+            && ($this->actorMatches($meeting['organizer_id'] ?? null)
+                || ($meeting['is_invited'] ?? null) === true);
+    }
+
+    /**
+     * §13: aceptar incorpora solo al invitado que respondió a su propia agenda.
+     * @param array<string, mixed>|null $meeting
+     */
+    public function canViewMeetingAgenda(?array $meeting): bool
+    {
+        return $this->canViewMeeting($meeting)
+            && ($this->actorMatches($meeting['organizer_id'] ?? null)
+                || (($meeting['is_invited'] ?? null) === true
+                    && ($meeting['invitation_response'] ?? null) === 'ACEPTADA'));
+    }
+
+    /**
+     * §13, D-24: solo organizador activo; el servicio valida estado y versión.
+     * No permite a ADMIN gestionar reuniones privadas ajenas.
+     * @param array<string, mixed>|null $meeting
+     */
+    public function canManageMeeting(?array $meeting): bool
+    {
+        return $this->hasActiveActor()
+            && $meeting !== null
+            && $this->can(Capabilities::MEETINGS_CREATE)
+            && $this->actorMatches($meeting['organizer_id'] ?? null);
+    }
+
+    /**
+     * §13: respuesta individual, nunca por el organizador ni por otro invitado.
+     * Estado y versión pertenecen al servicio; no se aceptan IDs del payload
+     * como prueba de invitación (mismo contrato confiable de canViewMeeting).
+     * @param array<string, mixed>|null $meeting
+     */
+    public function canRespondMeeting(?array $meeting): bool
+    {
+        return $this->hasActiveActor()
+            && $meeting !== null
+            && $this->can(Capabilities::MEETINGS_RESPOND)
+            && ($meeting['is_invited'] ?? null) === true
+            && !$this->actorMatches($meeting['organizer_id'] ?? null);
+    }
+
+    /**
+     * §13, §16, D-25: lectura y marcado de notificaciones propias, incluso ADMIN.
+     * @param array<string, mixed>|null $note
+     */
+    public function canReadNotification(?array $note): bool
+    {
+        return $this->hasActiveActor()
+            && $note !== null
+            && $this->can(Capabilities::NOTIFICATIONS_VIEW)
+            && $this->actorMatches($note['user_id'] ?? null);
+    }
+
     private function hasActiveActor(): bool
     {
         $user = $this->user();

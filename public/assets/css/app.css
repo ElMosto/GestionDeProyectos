@@ -1431,6 +1431,37 @@ body.dialog-open {
     padding-block-start: 12px;
 }
 
+.meeting-list,
+.notification-list {
+    list-style: none;
+    padding: 0;
+}
+
+.meeting-list > li,
+.notification-item {
+    padding: 16px;
+    overflow-wrap: anywhere;
+}
+
+.meeting-form select[multiple] {
+    min-height: 12rem;
+}
+
+.meeting-form input[type="checkbox"] {
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.meeting-form .form-row:has(input[type="checkbox"]) label {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+}
+
+.notification-state {
+    font-weight: 700;
+}
+
 .filters {
     display: grid;
     gap: 12px;

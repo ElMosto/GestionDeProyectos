@@ -12,6 +12,7 @@ export async function renderAgenda(root, ctx) {
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 12);
     const results = el('div', { class: 'stack' });
     const reservationResults = el('div', { class: 'stack' });
+    const meetingResults = el('div', { class: 'stack' });
     const form = el('form', { class: 'filters' }, [dateField('from', 'Desde', date(now)), dateField('to', 'Hasta', date(end)), el('button', { type: 'submit', class: 'btn btn-secondary' }, 'Consultar')]);
     form.querySelectorAll('input[type="date"]').forEach((input) => { input.required = true; });
     const filters = formValues(form);
@@ -27,6 +28,12 @@ export async function renderAgenda(root, ctx) {
         { label: 'Fin', render: (r) => formatDateTime(r.end_at, timezone) },
         { label: 'Estado', render: (r) => workLabel(r.status) },
     ] }) : emptyState({ title: 'Sin reservas en este rango', message: 'Aquí aparecen únicamente las reservas a tu cargo.' }), 'reservas en agenda');
+    const meetings = pagedList(meetingResults, '/agenda/meetings', filters, (data) => data.length ? dataTable({ caption: 'Reuniones propias', rows: data, columns: [
+        { label: 'Reunión', render: (m) => el('a', { href: `#/reuniones/${encodeURIComponent(m.meeting_id ?? m.id)}` }, m.title ?? 'Reunión') },
+        { label: 'Inicio', render: (m) => formatDateTime(m.start_at, timezone) },
+        { label: 'Fin', render: (m) => formatDateTime(m.end_at, timezone) },
+        { label: 'Modalidad', render: (m) => workLabel(m.modality) },
+    ] }) : emptyState({ title: 'Sin reuniones en este rango', message: 'Las invitaciones pendientes o rechazadas no se incorporan a tu agenda.' }), 'reuniones en agenda');
     const periods = el('nav', { class: 'project-tabs', 'aria-label': 'Rango de agenda' });
     for (const [label, period] of [['Día', 'day'], ['Semana', 'week'], ['Mes', 'month']]) {
         const button = el('button', { type: 'button', class: 'btn btn-secondary', text: label });
@@ -48,7 +55,7 @@ export async function renderAgenda(root, ctx) {
         });
         periods.append(button);
     }
-    mount(root, el('section', { class: 'stack' }, [pageHeader({ title: 'Agenda', lead: `Tareas de día completo y reservas a tu cargo. Horas en ${timezone}. Las reuniones se incorporarán en la fase 5.` }), periods, form, results, reservationResults]));
-    form.addEventListener('submit', (event) => { event.preventDefault(); Object.assign(filters, formValues(form)); void Promise.all([list.reset(), reservations.reset()]); });
-    await Promise.all([list.load(), reservations.load()]);
+    mount(root, el('section', { class: 'stack' }, [pageHeader({ title: 'Agenda', lead: `Tareas de día completo, reservas a tu cargo y reuniones que organizas o aceptaste. Horas en ${timezone}.` }), periods, form, results, reservationResults, meetingResults]));
+    form.addEventListener('submit', (event) => { event.preventDefault(); Object.assign(filters, formValues(form)); void Promise.all([list.reset(), reservations.reset(), meetings.reset()]); });
+    await Promise.all([list.load(), reservations.load(), meetings.load()]);
 }

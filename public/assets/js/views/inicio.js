@@ -1,5 +1,5 @@
 /**
- * Inicio (`#/inicio`): saludo y accesos a los módulos disponibles en las fases 1–4.
+ * Inicio (`#/inicio`): saludo y accesos a los módulos disponibles en las fases 1–5.
  *
  * No inventa datos de proyectos, ventas ni agenda: solo muestra lo que ya existe y
  * anuncia lo que llegará en fases posteriores (§17, §20).
@@ -37,6 +37,18 @@ export function renderInicio(container, ctx) {
             description: 'Tus tareas y reservas a cargo por rango de fechas.',
             path: '/agenda',
             visible: capabilities['agenda.viewOwn'] === true,
+        },
+        {
+            title: 'Mis reuniones',
+            description: 'Solicitudes que organizas e invitaciones individuales. Solo las aceptadas aparecen en tu agenda.',
+            path: '/reuniones',
+            visible: capabilities['meetings.create'] === true || capabilities['meetings.respond'] === true,
+        },
+        {
+            title: 'Notificaciones',
+            description: 'Avisos propios, leídos y no leídos, sin datos privados de terceros.',
+            path: '/notificaciones',
+            visible: capabilities['notifications.viewOwn'] === true,
         },
         {
             title: 'Clientes',
@@ -135,7 +147,7 @@ export function renderInicio(container, ctx) {
         ]),
         panel({
             title: 'Próximas fases',
-            description: 'Reuniones y finanzas globales llegan en las próximas fases.',
+            description: 'Las finanzas globales llegan en la próxima fase.',
             children: el('p', { class: 'panel-text', text: 'Cuando estén disponibles aparecerán en el menú. Este inicio no muestra datos de ejemplo ni cifras calculadas en el navegador.' }),
         }),
     ]);

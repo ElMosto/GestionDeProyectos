@@ -22,6 +22,7 @@ use App\Services\SpaceBlockService;
 use App\Services\PaymentLedger;
 use App\Services\ProjectAudit;
 use App\Services\ProjectIdempotency;
+use App\Services\NotificationService;
 
 return static function (Container $container, string $root): void {
     foreach ([ReservationRepository::class, ReservationSaleRepository::class, SpaceRepository::class,
@@ -39,6 +40,7 @@ return static function (Container $container, string $root): void {
         $c->get(ReservationRepository::class), $c->get(ReservationSaleRepository::class), $c->get(SpaceOccupancyRepository::class),
         $c->get(SpaceOccupancyService::class), $c->get(SequenceRepository::class), $c->get(PaymentLedger::class),
         $c->get(Authorizer::class), $c->get(ProjectAudit::class), $c->get(ProjectIdempotency::class),
+        $c->get(NotificationService::class),
     ));
     $container->singleton(SpaceBlockService::class, static fn (Container $c): SpaceBlockService => new SpaceBlockService(
         $c->get(SpaceBlockRepository::class), $c->get(SpaceOccupancyRepository::class), $c->get(SpaceOccupancyService::class),

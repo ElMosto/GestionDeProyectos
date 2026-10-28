@@ -10,7 +10,7 @@ Cada fase termina con: pruebas en verde, `docs/fases.md` actualizado, commit y `
 | 2 | Proyectos, etapas, tareas, membresías, tareas independientes | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
 | 3 | Productos, extras, ventas, cobros, tickets de venta | backend-php, documentos-salida, frontend-web, qa-aceptacion | **Completada localmente** |
 | 4 | Espacios, reservas transaccionales, agenda | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
-| 5 | Reuniones, invitaciones, notificaciones | backend-php, frontend-web, qa-aceptacion | Pendiente |
+| 5 | Reuniones, invitaciones, notificaciones | backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
 | 6 | Dashboard, gastos, Gantt XLSX, auditoría, pruebas, despliegue | backend-php, documentos-salida, seguridad-permisos, qa-aceptacion | Pendiente |
 | 7 | App Android (fuera del alcance inicial; contrato ya preparado) | movil-android | Futuro |
 
@@ -104,6 +104,22 @@ Dashboard, gastos, reservas y XLSX siguen en sus fases correspondientes.
 El primer espacio real y sus horarios/tarifa se configuran por ADMIN; no se inventan datos
 operativos en seeds. Hosting e impresora física conservan las limitaciones anteriores.
 Reuniones/notificaciones y dashboard se implementarán en las fases siguientes.
+
+## Fase 5 — Reuniones y notificaciones (completada localmente)
+
+- [x] Esquema revisado sin migración nueva; invitados fijados al crear, D-24.
+- [x] Solicitudes privadas, respuestas individuales y versiones de invitación string.
+- [x] Cambio de horario restablece todas las invitaciones; versiones antiguas rechazadas.
+- [x] Ocupación de reunión coordinada con reservas/mantenimiento, sin venta ni pago.
+- [x] Advertencias de cruce personal sin revelar otras actividades; no omiten mutex de espacio.
+- [x] Agenda aditiva de reuniones organizadas/aceptadas, privada incluso para ADMIN.
+- [x] Notificaciones persistidas propias, leído idempotente y payload genérico regenerado.
+- [x] Avisos de tareas/reservas en su misma transacción; fallo de aviso revierte el negocio.
+- [x] Bandeja con sondeo visible cada minuto y limpieza al salir; OpenAPI 0.7.0.
+- [x] **353 pruebas / 6.929 aserciones**, más **67 comprobaciones** de navegador nuevas.
+  Regresión acumulada: **233 comprobaciones** de navegador de fases 1–5.
+
+Hosting sigue pendiente; no se añadieron correo, cron ni servicios externos.
 
 ## Riesgos conocidos por fase
 

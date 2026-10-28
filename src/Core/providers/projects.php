@@ -18,6 +18,7 @@ use App\Repositories\SequenceRepository;
 use App\Repositories\StageRepository;
 use App\Repositories\TaskRepository;
 use App\Services\ProjectAudit;
+use App\Services\NotificationService;
 use App\Services\ProjectChargeService;
 use App\Services\ProjectIdempotency;
 use App\Services\ProjectService;
@@ -45,7 +46,7 @@ return static function (Container $container, string $root): void {
     ));
     $container->singleton(TaskService::class, static fn (Container $c): TaskService => new TaskService(
         $c->get(TaskRepository::class), $c->get(ProjectRepository::class), $c->get(StageRepository::class),
-        $c->get(ProjectService::class), $c->get(Database::class), $c->get(Authorizer::class), $c->get(ProjectAudit::class),
+        $c->get(ProjectService::class), $c->get(Database::class), $c->get(Authorizer::class), $c->get(ProjectAudit::class), $c->get(NotificationService::class),
     ));
     $container->singleton(ProjectChargeService::class, static fn (Container $c): ProjectChargeService => new ProjectChargeService(
         $c->get(ProjectChargeRepository::class), $c->get(ProjectRepository::class), $c->get(ProjectService::class),

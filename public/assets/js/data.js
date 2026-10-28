@@ -20,6 +20,8 @@ const WORK_LABELS = {
     EMITIDA: 'Emitida', ORDINARIA: 'Ordinaria', RESERVA: 'Reserva',
     VALID: 'Válido', VOID: 'Anulado', EFFECTIVE: 'Efectivo',
     CONFIRMED: 'Confirmada', IN_PROGRESS: 'En curso', FINISHED: 'Finalizada', CANCELLED: 'Cancelada',
+    PROGRAMADA: 'Programada', ACEPTADA: 'Aceptada', RECHAZADA: 'Rechazada',
+    PRESENCIAL: 'Presencial', VIRTUAL: 'Virtual', HIBRIDA: 'Híbrida',
 };
 export const workLabel = (code) => WORK_LABELS[code] ?? code ?? '—';
 export const workOptions = (codes) => codes.map((value) => ({ value, label: workLabel(value) }));

@@ -29,6 +29,7 @@ final class ReservationService
         private readonly Authorizer $authorizer,
         private readonly ProjectAudit $audit,
         private readonly ProjectIdempotency $idempotency,
+        private readonly NotificationService $notifications,
     ) {
     }
 
@@ -81,6 +82,7 @@ final class ReservationService
                 $input + ['sale_id' => (string) $sale, 'occupancy_id' => (string) $occupancy,
                     'hourly_rate_snapshot' => (string) $space['hourly_rate'], 'total' => $total, 'status' => 'CONFIRMED']);
             $this->audit->record('SALE_ISSUE', 'sale', $sale, null, ['reservation_id' => (string) $id, 'total' => $total, 'status' => 'EMITIDA']);
+            $this->notifications->notify([$actor], 'RESERVATION_CREATED', 'reservation', $id);
             return $this->show($id);
         }, 201, function (array $result): void {
             $this->requireReservation((int) $result['id']);
@@ -128,6 +130,7 @@ final class ReservationService
                 [$old] = $this->locked($pre, $version);
                 $this->reservations->updateNotes($id, $notes);
                 $this->audit->record('RESERVATION_NOTES_UPDATE', 'reservation', $id, ['notes' => $old['notes']], ['notes' => $notes]);
+                $this->notifications->notify([(int) $old['responsible_id']], 'RESERVATION_CHANGED', 'reservation', $id);
                 return $this->show($id);
             }, 200, fn () => $this->requireReservation($id));
     }
@@ -165,6 +168,7 @@ final class ReservationService
                 $this->audit->record('SALE_RESERVATION_RESCHEDULE', 'sale', (int) $sale['id'],
                     ['total' => $sale['total'], 'version' => $sale['version']],
                     ['total' => $total, 'reservation_id' => (string) $id, 'version' => (string) ((int) $sale['version'] + 1)]);
+                $this->notifications->notify([(int) $old['responsible_id']], 'RESERVATION_CHANGED', 'reservation', $id);
                 return $this->show($id);
             }, 200, fn () => $this->requireReservation($id));
     }
@@ -184,6 +188,7 @@ final class ReservationService
                 $this->occupancies->transition((int) $old['occupancy_id'], $status);
                 $this->audit->record('RESERVATION_TRANSITION', 'reservation', $id,
                     ['status' => $old['status']], ['status' => $status, 'reason' => $reason]);
+                $this->notifications->notify([(int) $old['responsible_id']], 'RESERVATION_CHANGED', 'reservation', $id);
                 return $this->show($id);
             }, 200, fn () => $this->requireReservation($id));
     }
@@ -214,6 +219,7 @@ final class ReservationService
                     ['status' => $old['status']], ['status' => 'CANCELLED', 'reason' => $reason]);
                 $this->audit->record('SALE_CANCEL', 'sale', (int) $sale['id'],
                     ['status' => $sale['status']], ['status' => 'CANCELADA', 'reason' => $reason, 'reservation_id' => (string) $id]);
+                $this->notifications->notify([(int) $old['responsible_id']], 'RESERVATION_CANCELLED', 'reservation', $id);
                 return $this->show($id);
             }, 200, function () use ($id): void {
                 if (!$this->authorizer->canCancelReservation($this->requireReservation($id))) {

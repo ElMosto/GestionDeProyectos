@@ -732,3 +732,159 @@ riesgo del servicio; requiere la prueba de dos conexiones reales del criterio E 
   restricciones CHECK, configuración UTC, BCMath y capacidad transaccional siguen sin validar;
   no se consideran resueltos por esta revisión local. Registrar propuestas en decisiones antes
   de integrar políticas distintas.
+
+## Fase 5: revisión previa de agenda, reuniones y avisos (§13–§15)
+
+### Resultado: sin migración 009
+
+004/005 cubren esta fase: **no se crea 009**, no se modifican migraciones aplicadas ni se
+añaden tablas, estados, índices o `private_notes`. Esta sección define el contrato previo a
+implementar repositorios; no certifica todavía el backend ni las pruebas funcionales de fase 5.
+
+Contrato exacto existente (PK/FK `BIGINT UNSIGNED`; instantes `DATETIME` UTC):
+
+| Tabla | Columnas y nullabilidad |
+|---|---|
+| `meetings` | `id` PK AUTO_INCREMENT; `organizer_id NOT NULL`; `title VARCHAR(160) NOT NULL`; `description TEXT NULL`; `start_at/end_at DATETIME NOT NULL`; `modality ENUM('PRESENCIAL','VIRTUAL','HIBRIDA') NOT NULL DEFAULT 'PRESENCIAL'`; `location VARCHAR(200) NULL`; `occupancy_id NULL UNIQUE`; `status ENUM('PROGRAMADA','CANCELADA','FINALIZADA') NOT NULL DEFAULT 'PROGRAMADA'`; `created_by NULL`; `version INT UNSIGNED NOT NULL DEFAULT 1`; `created_at/updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`, actualización automática de `updated_at` |
+| `meeting_invitations` | `id` PK AUTO_INCREMENT; `meeting_id/invitee_id NOT NULL`; `response ENUM('PENDIENTE','ACEPTADA','RECHAZADA') NOT NULL DEFAULT 'PENDIENTE'`; `responded_at DATETIME NULL`; `version INT UNSIGNED NOT NULL DEFAULT 1`; `created_at/updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`, actualización automática de `updated_at`; UNIQUE `(meeting_id,invitee_id)` |
+| `notifications` | `id` PK AUTO_INCREMENT; `user_id NOT NULL`; `type VARCHAR(40) NOT NULL`; `entity_type VARCHAR(40) NULL`; `entity_id BIGINT UNSIGNED NULL`; `payload JSON NULL`; `read_at DATETIME NULL`; `created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`. No tiene `version`, `updated_at` ni `created_by`: solo cambia `read_at` mediante operación idempotente |
+
+Las FK son RESTRICT. BD garantiza `meetings.end_at > start_at`, unicidad de ocupación y de
+invitación y que ACEPTADA/RECHAZADA tengan `responded_at`. **No garantiza** la implicación
+inversa: PENDIENTE con fecha no NULL es técnicamente válida; el servicio siempre escribe
+PENDIENTE con `responded_at = NULL`. No se refuerza ese CHECK mediante DDL solo para este
+protocolo. El historial de respuestas anteriores se registra en `audit_logs` al cambiarlas;
+la fila de invitación representa el estado vigente, no un registro append-only.
+
+### Propuestas conservadoras para decisiones y backend
+
+- Agenda **propia**, también para ADMIN: organizar o tener invitación ACEPTADA; ser administrador
+  no permite consultar la agenda privada ajena. Descripción y lugar/enlace no se publican en el
+  calendario de espacios, notificaciones, advertencias de cruce ni errores. No existe un campo
+  `private_notes` que permita separar notas exclusivas del organizador: no inventarlo en payloads.
+- PENDIENTE/RECHAZADA no se incorporan al calendario del invitado. La solicitud pendiente puede
+  consultarse por su destinatario con proyección mínima para decidir: ID, título, organizador,
+  inicio/fin, modalidad, espacio si lo hay y su propia respuesta/versión. No necesita descripción,
+  enlace privado, lista/respuestas de otros invitados ni actividades privadas de terceros.
+  Organizador e invitados aceptados pueden ver descripción y lugar autorizados; una notificación
+  antigua no sustituye comprobar pertenencia/estado actual en el servidor.
+- **Lista de invitados fijada al crear** en esta fase: cuentas activas internas, sin clientes,
+  sin duplicados ni organizador como invitado. PATCH de reunión no reemplaza, añade ni elimina
+  invitados; rechazar explícitamente ese campo, no ignorarlo. §15 no define gestión separada de
+  invitados. No introducir PUT/DELETE de invitaciones ni `active`/`revoked_at` para una función
+  no requerida. Cambiar alcance exige cancelar y crear otra reunión. RECHAZADA significa decisión
+  personal, **no revocación**: usarla como expulsión conservaría acceso y además el reset la
+  reabriría. Si se requiere editar destinatarios después, definir primero revocación/visibilidad
+  y su migración; no borrar filas ni perder historial por comodidad.
+- Respuesta solo del propio `invitee_id`, nunca en nombre de todos ni por privilegio ADMIN.
+  `ACCEPTED/DECLINED` HTTP se normalizan a `ACEPTADA/RECHAZADA`; no son valores del ENUM.
+  Responder no cancela la reunión ni modifica respuestas ajenas. Se exige versión esperada
+  de la invitación: todo cambio temporal la incrementa bajo el mismo bloqueo de reunión,
+  evitando aceptar una hora distinta de la consultada sin exigir dos versiones al cliente.
+- Cambio **real** de inicio o fin (instantes UTC normalizados) restablece **todas** las invitaciones,
+  incluidas RECHAZADA y ya PENDIENTE: `response='PENDIENTE', responded_at=NULL, version=version+1`.
+  Incrementar versión de reunión; auditar estado anterior y emitir aviso de cambio en la misma
+  transacción. Desde COMMIT las aceptaciones antiguas dejan de aportar eventos a agenda, sin
+  copiar ni borrar eventos. Un PATCH sin cambio temporal no resetea respuestas. Lugar/modalidad
+  pueden generar aviso de cambio, pero §13 solo exige reset por fecha/hora.
+- Cancelar: solo organizador, sin excepción ADMIN para agenda privada no participante; conservar
+  reunión e invitaciones, cambiar reunión a CANCELADA y su ocupación a CANCELLED. No convertir
+  invitaciones a RECHAZADA ni emitir reembolsos. PROGRAMADA usa ocupación CONFIRMED; si se expone
+  finalización explícita en el futuro, FINALIZADA deberá coordinar FINISHED. No inferir estados
+  solo por el reloj ni añadir ruta de finalización no especificada.
+- Una reunión no facturada no crea venta, partida ni folio financiero. La facturación opcional
+  carece de contrato concreto en esta fase: no inventar vínculo a ventas ni permitir facturar
+  por la ruta de reuniones. Reunión sin espacio permite cruce personal con advertencia genérica;
+  con espacio, un cruce bloqueante no puede aceptarse mediante confirmación de advertencia.
+
+### Orden único de bloqueos y sincronización con ocupaciones
+
+Reutilizar el coordinador existente de fase 4; `SpaceOccupancyService.lockSpaces()` ordena IDs
+numéricamente y `assertAvailable()` consulta **todos** los kinds, no solo reservas. Las nuevas
+rutas de reuniones no deben eludir ese protocolo ni llamar a disponibilidad fuera de transacción.
+
+1. BEGIN; reservar/verificar idempotencia antes de locks de negocio. Exigir Idempotency-Key al
+   crear, reprogramar o cancelar ocupación MEETING; mantener replay y hash de actor/ruta/cuerpo.
+2. Lectura preliminar solo localiza reunión/ocupación y espacios origen/destino. Bloquear espacios
+   por ID ascendente **antes de reunión**, incluso al pasar de/sin espacio o cancelar. Después,
+   bloquear reunión, ocupación existente e invitaciones (cada conjunto por ID ascendente).
+   Nunca adquirir un espacio después de reunión/invitación. Sin espacio en origen ni destino,
+   comenzar por reunión. Responder sigue reunión → invitación; no toma espacio posteriormente.
+3. Releer relación y versión bajo lock. Si el espacio actual ya no coincide con el conjunto
+   preliminar, rollback/reinicio acotado; no añadir tardíamente otro espacio. Así responder y
+   reprogramar/cancelar quedan serializados por la reunión. Crear bloquea primero el destino,
+   después crea ocupación/reunión/invitaciones en la misma transacción.
+4. Bajo los espacios bloqueados, validar actividad, horarios/granularidad con las reglas de fase 4
+   y conflictos actuales `FOR UPDATE` en `space_occupancies`: estados CONFIRMED/IN_PROGRESS,
+   `start_at < :new_end AND end_at > :new_start`, excluyendo solo la ocupación propia al mover.
+   No filtrar por `kind`; MEETING compite con RESERVATION y MAINTENANCE. Bordes adyacentes válidos.
+5. Mantener sincronizadas fechas de `meetings` y ocupación (la duplicación es necesaria porque
+   reuniones sin espacio también tienen fechas). `occupancy_id` no se acepta arbitrariamente
+   del cliente: el servidor crea/enlaza ocupación MEETING y comprueba origen y pertenencia.
+   Mover entre espacios actualiza esa misma fila; retirar espacio cancela su ocupación antes
+   de limpiar la FK, preservando la fila y auditoría. La historia del enlace vive en auditoría.
+6. Escritura, versiones, reset individual, auditoría de lista blanca y avisos pertenecen a la
+   misma transacción. Incrementar solo versiones de entidades modificadas; COMMIT. Deadlocks
+   solo se reintentan en el helper central. La BD no garantiza sincronización entre tablas ni
+   solapamientos parciales: son obligaciones del servicio y pruebas reales de concurrencia.
+
+### Notificaciones y consultas cubiertas por índices existentes
+
+`payload` solo necesita mensaje genérico/código estable (p. ej. «Tienes una invitación»);
+`entity_type/entity_id` ya permiten enlazar el recurso. Nunca almacenar título/descripción,
+location/enlace, notas de ocupación, actividades ajenas, cliente ni importes como copia privada
+en el aviso. JSON válido no significa contenido autorizado: lista blanca en backend. Lectura
+de bandeja y contador siempre `user_id=:actor`, incluidos ADMIN. Marcar leído preserva el primer
+instante y no afecta otros destinatarios ni acepta invitaciones:
+
+```sql
+UPDATE notifications SET read_at = COALESCE(read_at, UTC_TIMESTAMP())
+ WHERE id = :notification AND user_id = :actor;
+```
+
+Si no cambió filas, distinguir aviso propio ya leído de ID ajeno mediante lectura filtrada por
+usuario; no interpretar `rowCount()=0` como permiso ni revelar si el ID existe para otro usuario.
+`entity_type/entity_id` son referencias informativas sin FK: si el recurso ya no es accesible,
+el aviso sigue genérico; nunca devolver detalles por la sola existencia de ese enlace.
+
+```sql
+-- Agenda organizada y aceptada: combinar IDs sin duplicados; mismo rango visible en ambas ramas.
+SELECT m.id FROM meetings m
+ WHERE m.organizer_id = :actor_organizer AND m.status = 'PROGRAMADA'
+   AND m.start_at < :visible_end_1 AND m.end_at > :visible_start_1
+UNION
+SELECT m.id FROM meeting_invitations i JOIN meetings m ON m.id = i.meeting_id
+ WHERE i.invitee_id = :actor_invitee AND i.response = 'ACEPTADA'
+   AND m.status = 'PROGRAMADA'
+   AND m.start_at < :visible_end_2 AND m.end_at > :visible_start_2;
+-- idx_meetings_organizer; idx_meeting_invitations_invitee + meetings.PRIMARY.
+
+SELECT id, type, entity_type, entity_id, read_at, created_at FROM notifications
+ WHERE user_id = :actor AND read_at IS NULL
+ ORDER BY created_at DESC, id DESC LIMIT 25;
+-- idx_notifications_user_read_created: igualdad usuario/lectura + orden temporal.
+```
+
+No añadir índice especulativo a agenda. La bandeja sin filtro de leído podría requerir filesort
+porque `read_at` precede a `created_at`; medir con datos reales antes de justificar otro índice.
+Consultas de tareas asignadas, reservas propias e hitos mantienen sus filtros por actor/participación
+y rango; no reutilizar listados ADMIN globales como agenda personal ni sumar filas multiplicadas
+por invitados. Advertir cruces personales con booleano/etiqueta genérica, sin exponer eventos.
+
+### Verificación de lectura (2026-10-28) y riesgos pendientes
+
+- MariaDB **10.4.32** real, usuario `gestion`: SHOW CREATE de las tres tablas en `gestion_test`
+  confirma tipos, CHECK, FK, únicos e índices indicados. Metadatos de `gestion`: tres tablas
+  InnoDB/utf8mb4_unicode_ci. Las tres tienen **0 filas en ambas bases** al revisar.
+- EXPLAIN real en `gestion`: rama organizada usa `idx_meetings_organizer`; rama aceptada usa
+  `idx_meeting_invitations_invitee` y lookup `eq_ref` por PK de reunión; avisos no leídos usan
+  `idx_notifications_user_read_created`; conflicto espacial usa `idx_space_occupancies_conflict`.
+  Son tablas vacías: no certifican rendimiento a volumen real, ni justifican índices nuevos.
+- Solo SELECT/SHOW/EXPLAIN: sin DDL, DML, reinicios de bases ni cambios de configuración. No se
+  modificó backend ni se ejecutaron pruebas funcionales. Queda para integración/QA demostrar
+  aceptación individual, reset de rechazadas, carrera respuesta/reprogramación, privacidad y
+  dos conexiones reales MEETING contra reserva/mantenimiento (también movimiento y cancelación).
+- Permisos, sanitización de payload, invitados activos, reset/versiones, coherencia reunión/
+  ocupación y conflictos parciales siguen en servicio. No presentar el UNIQUE de intervalo
+  exacto como exclusión completa. UTC/modo estricto en conexión y verificación del hosting
+  siguen siendo obligatorios; esta revisión local no cierra los bloqueos de operación.

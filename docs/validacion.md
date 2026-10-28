@@ -1,8 +1,33 @@
 # Validación y criterios de aceptación
 
-Evidencia local acumulada de fases 1–4.
+Evidencia local acumulada de fases 1–5.
 **No certificado para despliegue**:
 falta inventario real del hosting (`docs/hosting.md`). No se ocultan pruebas fallidas ni skips.
+
+## Fase 5 — verificada localmente
+
+- Suite completa aleatoria: **353 pruebas / 6.929 aserciones**, sin fallos ni skips.
+  `php vendor/bin/phpunit --order-by=random --random-order-seed=20261028`.
+- Criterio **F**: `MeetingsApiTest`, `NotificationsApiTest`, `MeetingConcurrencyTest`,
+  `BusinessNotificationsTest`, `MeetingAuthorizerTest` y `MeetingPresenterTest`.
+  Aceptar/rechazar es individual; reprogramar reinicia todas las invitaciones y rechaza
+  versiones antiguas. ADMIN ajeno tampoco puede consultar detalles privados ni avisos ajenos.
+- Cinco carreras reales: reuniones simultáneas, replay, reunión/reserva, reunión/mantenimiento
+  y movimientos cruzados de espacios. Se verifican locks y resultados, no llamadas secuenciales.
+- Avisos de asignación/reasignación y cambios/cancelaciones de reservas integrados en sus
+  transacciones; triggers de fallo demuestran rollback de negocio, auditoría e idempotencia.
+- `node tests/Browser/phase5.mjs`: **67 comprobaciones PHP/MariaDB/Chromium** de bandeja,
+  marcado leído, invitación pendiente, aceptación/rechazo, agenda, reaceptación, privacidad,
+  conflicto con reserva, reunión personal breve y cancelación por organizador.
+- El primer smoke descubrió una capacidad mal nombrada en UI (`notifications.view` frente a
+  `notifications.viewOwn`). Corregidos navegación, inicio y bandeja; smoke y regresión verdes.
+- Regresión de navegador completa: **18 + 52 + 56 + 40 + 67 = 233 comprobaciones**.
+- Lint: **198 PHP** y **35 módulos JS**, correctos. OpenAPI **0.7.0**, 0 errores y cinco
+  advertencias heredadas. Composer audit sin vulnerabilidades; `git diff --check` limpio.
+- La interrupción del agente por cuota no se presenta como entrega completa: el integrador
+  ejecutó directamente la suite y los flujos reales y revisó el código guardado antes del cierre.
+- El sondeo se limita a bandeja abierta/visible y se limpia al salir; no se implementó correo,
+  cron ni campana global. Hosting e impresora física continúan pendientes.
 
 ## Fase 4 — verificada localmente
 

@@ -29,6 +29,10 @@ indicada.
 | D-21 | Reprogramar en el mismo espacio conserva tarifa histórica; cambiar de espacio adopta tarifa vigente del destino. Actualiza la venta/partida en transacción sin reemplazar sus IDs ni bajar del neto cobrado. | Propuesta | 4 |
 | D-22 | Sin ventanas de horario no hay disponibilidad. Granularidad desde medianoche local; ventanas nocturnas divididas con extremo 24:00:00. No se inventan tarifa ni horarios del espacio inicial: ADMIN debe configurarlos. | Propuesta conservadora | 4 |
 | D-23 | Cancelar reserva cancela su venta: se aplica la restricción ADMIN de §10/D-18 también al coordinador, incluso sin pagos. La matriz previa permitía líder; ante contradicción gana la restricción mayor. Requiere motivo y neto cero sin reembolso automático. | Propuesta conservadora ante contradicción | 4 |
+| D-24 | Invitados fijados al crear reunión; PATCH rechaza cambiar lista, sin borrar historial ni inventar revocación. Cambiar inicio/fin restablece todas las respuestas a PENDIENTE (incluidas rechazadas), limpia responded_at e incrementa versiones. | Propuesta conservadora | 5 |
+| D-25 | Agenda personal privada incluso para ADMIN. Pendiente/rechazado recibe detalle mínimo de invitación para responder, no incorporación al calendario. Notificaciones persistidas genéricas sin dinero, títulos ni textos privados del objeto. | Propuesta conservadora | 5 |
+| D-26 | Cruces personales propios requieren acknowledge_conflicts explícito; se permite continuar sin revelar actividades ajenas. La ocupación de espacio nunca se omite con esa confirmación. Solo cambios temporales reinician aceptaciones; cambios de texto/lugar mantienen respuestas. | Propuesta conservadora | 5 |
+| D-27 | Sondeo de avisos cada 60 s mientras la bandeja esté abierta y la pestaña visible; detener al navegar/salir. No hay campana global ni sondeo en segundo plano. | Propuesta | 5 |
 
 ## Puntos abiertos heredados del §21
 

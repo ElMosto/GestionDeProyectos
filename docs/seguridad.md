@@ -383,3 +383,34 @@ Contrato de `Authorizer` para el servicio coordinador (§5, §10, §12, §16; D-
 Cobertura sin BD: `tests/Unit/Policies/ReservationAuthorizerTest.php` prueba los tres roles,
 propio/ajeno, histórico, nulos, cuentas inactivas, strings PDO, IDs malformados/BIGINT,
 cancelación exclusiva ADMIN (D-23) y separación entre ocupación y detalle privado.
+
+## 17. Políticas de reuniones y notificaciones — fase 5
+
+Contrato de `Authorizer` (§5, §13, §16; D-24/D-25), sin ampliar capacidades existentes:
+
+- `canViewMeeting(?array $meeting): bool`: organizador activo o invitado con
+  `is_invited === true`. Este booleano se calcula en SQL para el actor autenticado,
+  nunca desde el payload ni por un `invitee_id` aportado por el cliente. Pendientes
+  y rechazadas solo reciben detalle mínimo de invitación mediante el serializador del servicio.
+- `canViewMeetingAgenda(?array $meeting): bool`: organizador, o invitado estricto con
+  `invitation_response === 'ACEPTADA'`. Una respuesta ajena no incorpora la reunión a su agenda.
+- `canManageMeeting(?array $meeting): bool`: exclusivamente organizador activo. El servicio
+  valida estados, versiones y reaceptación al cambiar horario (D-24).
+- `canRespondMeeting(?array $meeting): bool`: invitado estricto que no sea organizador;
+  el servicio valida estados y versiones. No concede responder por otros.
+- `canReadNotification(?array $note): bool`: exclusivamente actor activo con `user_id` propio,
+  para lectura y marcado. La notificación persistida debe ser genérica, sin títulos, textos
+  privados ni importes; acceder a ella no concede acceso al objeto enlazado (D-25).
+- ADMIN **no** obtiene acceso global a reuniones privadas, agenda ni notificaciones ajenas.
+  Filas nulas, actores anónimos/inactivos, roles desconocidos y relaciones ausentes se deniegan.
+  Una invitación confiable puede permitir ver/responder aun sin `organizer_id`; nunca gestionar.
+- Se reutiliza normalización estricta de IDs int/string decimal positivo, sin coerción de
+  booleanos/floats/prefijos ni truncamiento de BIGINT. Rol y objeto se verifican en backend:
+  `MEETINGS_CREATE` para ver/agenda/gestionar, `MEETINGS_RESPOND` para responder y
+  `NOTIFICATIONS_VIEW` para notificaciones. Capacidades del cliente son informativas.
+- Listados deben filtrar relaciones en SQL; también se reautoriza el detalle directo.
+  Un `403` no revela existencia; calendario, notificaciones y errores no revelan datos privados.
+
+Cobertura sin BD: `tests/Unit/Policies/MeetingAuthorizerTest.php` verifica los tres roles,
+incluido ADMIN ajeno, organizador/invitado, aceptación individual y agenda, notificaciones
+propias, booleano estricto de invitación, nulos, inactividad e IDs PDO/malformados/BIGINT.
