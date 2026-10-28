@@ -10,6 +10,7 @@ use App\Core\Database;
 use App\Policies\Authorizer;
 use App\Policies\Capabilities;
 use App\Repositories\SaleRepository;
+use App\Repositories\ReservationSaleRepository;
 use App\Repositories\SequenceRepository;
 use App\Support\Money;
 use App\Support\Version;
@@ -25,6 +26,7 @@ final class SaleService
         private readonly Authorizer $authorizer,
         private readonly ProjectAudit $audit,
         private readonly ProjectIdempotency $idempotency,
+        private readonly ReservationSaleRepository $reservationSales,
     ) {
     }
 
@@ -245,6 +247,15 @@ final class SaleService
     public function ticketData(int $id): array
     {
         $out = $this->show($id);
+        // La autorización de venta/responsable sucede en show antes del anexo (§12).
+        if ($out['type'] === 'RESERVA') {
+            $reservation = $this->reservationSales->ticket($id);
+            if ($reservation !== null) {
+                $reservation['start_at'] = ReservationPresenter::iso($reservation['start_at']);
+                $reservation['end_at'] = ReservationPresenter::iso($reservation['end_at']);
+                $out['reservation'] = $reservation;
+            }
+        }
         $client = $out['client_id'] === null ? null : $this->sales->client((int) $out['client_id']);
         if ($client !== null) {
             $client['id'] = (string) $client['id'];

@@ -25,6 +25,10 @@ indicada.
 | D-17 | Proyectos usan contadores anuales `project.AAAA`, bloqueados en transacción; el año integra el folio. Se conservan los cinco nombres base del seed por compatibilidad, pero no se reinician contadores usados. Sustituye para proyectos la propuesta inicial del comentario del seed 003 de contador global. | Propuesta | 2 |
 | D-18 | Cancelar ventas: solo ADMIN por §10 (más restrictivo que la matriz previa que permitía líder sin pagos). Motivo obligatorio; con neto cobrado positivo se rechaza hasta resolver explícitamente reembolsos/anulaciones. No se inventan penalizaciones ni devolución automática. | Propuesta conservadora ante contradicción | 3 |
 | D-19 | En payments/refunds, `idempotency_key` guarda SHA-256 de `[actor,operation,path,key HTTP]`, conservando la clave HTTP original en el registro de solicitudes. Evita colisiones entre actores de las columnas UNIQUE globales. Folios de ventas/pagos/reembolsos usan secuencias globales del seed. | Propuesta | 3 |
+| D-20 | Reserva nace confirmada con una venta RESERVA/EMITIDA y una partida, cantidad 1.000 y precio igual al importe calculado; previsualizar no persiste borradores ni garantiza disponibilidad. No se crea otro estado fuera del esquema. | Propuesta conservadora | 4 |
+| D-21 | Reprogramar en el mismo espacio conserva tarifa histórica; cambiar de espacio adopta tarifa vigente del destino. Actualiza la venta/partida en transacción sin reemplazar sus IDs ni bajar del neto cobrado. | Propuesta | 4 |
+| D-22 | Sin ventanas de horario no hay disponibilidad. Granularidad desde medianoche local; ventanas nocturnas divididas con extremo 24:00:00. No se inventan tarifa ni horarios del espacio inicial: ADMIN debe configurarlos. | Propuesta conservadora | 4 |
+| D-23 | Cancelar reserva cancela su venta: se aplica la restricción ADMIN de §10/D-18 también al coordinador, incluso sin pagos. La matriz previa permitía líder; ante contradicción gana la restricción mayor. Requiere motivo y neto cero sin reembolso automático. | Propuesta conservadora ante contradicción | 4 |
 
 ## Puntos abiertos heredados del §21
 

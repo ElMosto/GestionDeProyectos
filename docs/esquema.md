@@ -565,3 +565,170 @@ MariaDB real **10.4.32**, cliente de aplicación `gestion`:
 - Base dedicada y sus privilegios retirados al terminar. No quedan fixtures en gestion ni
   gestion_test. No se ejecutaron ni modificaron pruebas PHP: la integración funcional y de
   concurrencia de fase 3 corresponde al backend/QA antes de cerrar la fase.
+
+## Fase 4: revisión previa de espacios y reservas (§12, §13, §14)
+
+### Resultado y contrato existente (sin migración 009)
+
+004 + 003 + 006, con la corrección de 008, son suficientes. **No se crea 009 vacía**, ni se
+modifican migraciones aplicadas. No se añaden estados, índices, tarifas por minuto ni columnas
+duplicadas de espacio/fechas en `reservations`. Esta revisión no implementa backend ni pruebas.
+
+Contrato para repositorios (además de los metadatos comunes `id`, `version`, `created_at`,
+`updated_at`; PK/FK `BIGINT UNSIGNED`, versión `INT UNSIGNED NOT NULL DEFAULT 1`):
+
+| Tabla | Columnas de negocio y nullabilidad |
+|---|---|
+| `spaces` | `name VARCHAR(120) NOT NULL UNIQUE`, `description TEXT NULL`, `hourly_rate DECIMAL(12,2) NOT NULL DEFAULT 0.00`, `block_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 30`, `active TINYINT(1) NOT NULL DEFAULT 1`, `created_by BIGINT UNSIGNED NULL` |
+| `space_hours` | `space_id NOT NULL`, `weekday TINYINT UNSIGNED NOT NULL` (ISO 1–7), `local_start_time TIME NOT NULL`, `local_end_time TIME NOT NULL`; único `(space_id,weekday,local_start_time)` |
+| `space_occupancies` | `space_id NOT NULL`, `start_at/end_at DATETIME NOT NULL` UTC, `kind ENUM('RESERVATION','MAINTENANCE','MEETING') NOT NULL`, `status ENUM('CONFIRMED','IN_PROGRESS','FINISHED','CANCELLED') NOT NULL DEFAULT 'CONFIRMED'`, `notes VARCHAR(255) NULL`, `created_by BIGINT UNSIGNED NULL` |
+| `reservations` | `occupancy_id`, `band_client_id`, `sale_id`, `responsible_id`: FK NOT NULL; `hourly_rate_snapshot/total DECIMAL(12,2) NOT NULL`; `status` mismo ENUM/default de ocupación; `notes TEXT NULL`, `created_by BIGINT UNSIGNED NULL` |
+| `space_blocks` | `occupancy_id NOT NULL UNIQUE`, `reason VARCHAR(255) NOT NULL`, `created_by BIGINT UNSIGNED NOT NULL`; su estado/espacio/fechas se derivan de la ocupación |
+
+`reservations.occupancy_id` y `reservations.sale_id` son **UNIQUE y NOT NULL**. No escribir
+`space_occupancies.blocking_slot VARCHAR(80)`: es generada persistente, nullable y única. La BD
+comprueba tarifa/total no negativos, bloque > 0 y fin > inicio. Todas las FK comerciales son
+RESTRICT. El servicio todavía debe garantizar cliente BANDA activo, responsables autorizados,
+coincidencia banda/cliente y responsable de venta/reserva, `kind` correcto y estados sincronizados.
+Una FK/UNIQUE no impide reutilizar una ocupación entre tablas de distinto tipo: validar también
+el origen; no enlazar ocupaciones arbitrarias suministradas por el cliente.
+
+### Propuestas explícitas para integrar en decisiones y servicios
+
+- **Sin borradores persistidos de reserva.** Crear produce siempre reserva y ocupación
+  `CONFIRMED` + venta `RESERVA/EMITIDA`, aun sin pago. El formulario/previsualización y la consulta
+  de disponibilidad no garantizan hueco. No introducir `BORRADOR` en el ENUM ni crear ventas de
+  reserva huérfanas como borrador. Esta propuesta precisa/sustituye para fase 4 la interpretación
+  de borrador como venta persistida descrita en la decisión de diseño 2 y comentario de 004.
+- **Cobro exacto:** duración en minutos enteros; calcular `tarifa_snapshot * minutos / 60`
+  conservando precisión y redondear half-up a dos decimales **una sola vez al final**. Nunca
+  redondear previamente una tarifa por minuto ni convertir horas a `DECIMAL(10,3)` para cobrar.
+  Ejemplo: `250.00 * 90 / 60 = 375.00`. Validar límites de `DECIMAL(12,2)` antes de escribir.
+- **Partida automática única:** `sale_items.product_id = NULL`, `quantity = '1.000'`,
+  `unit_price = line_total = reservations.total`, sin extras, `sort_order = 0`;
+  `name_snapshot VARCHAR(160)` identifica el servicio de reserva/espacio y duración. La tarifa
+  histórica reside en `hourly_rate_snapshot`; no inventar un producto obligatorio ni aplicar el
+  permiso general de concepto libre ADMIN a este concepto generado por el servidor. La venta
+  conserva folio `VTA`, moneda configurada y `issued_at` UTC. Este modelo respeta la fórmula
+  de partida sin aproximar minutos a horas decimales. El pago se registra **solo por sale_id**
+  (`project_id = NULL`); nunca existe un pago directo de reserva ni otro ingreso duplicado.
+- **Tarifa al reprogramar, propuesta:** mismo espacio conserva `hourly_rate_snapshot`, aunque
+  cambie el catálogo; cambio de espacio toma la tarifa vigente del destino bajo bloqueo y
+  sustituye el snapshot. Recalcular total por duración, conservar IDs de reserva/ocupación/
+  venta/partida y auditar antes/después (incluida tarifa). Actualizar también snapshot descriptivo,
+  precio y total de la partida, total y versión de venta **aunque esté EMITIDA**: únicamente
+  mediante el coordinador de reservas, nunca habilitando edición genérica de ventas emitidas.
+  No cambiar folio ni `issued_at` histórico. `total nuevo >= neto cobrado` siempre; con cobros,
+  un ajuste comercial exige ADMIN según D-15. El estado de pago se recalcula, no se almacena.
+- **Cancelación:** coordinada, sin borrar filas, con reserva/ocupación `CANCELLED` y venta
+  `CANCELADA`. Por §10/D-18 cancelar la venta exige ADMIN incluso sin cobros; con pagos exige
+  además resolución manual previa mediante reembolsos efectivos hasta neto cero y motivo
+  auditado. No emitir reembolso automático, anular un cobro para simular devolución ni inventar
+  penalizaciones. Una venta RESERVA no puede cancelarse por la ruta ordinaria aislada.
+
+### Protocolo único de bloqueos
+
+1. BEGIN; reservar/bloquear `idempotency_requests` **antes de cualquier espacio**, con la misma
+   semántica de hash/replay de fase 3. Aplicar a creación/reprogramación/cancelación y bloqueos;
+   también a reuniones con espacio cuando se implementen. Replay no vuelve a crear documentos.
+2. Lectura preliminar solo para localizar IDs actuales; bloquear **todos** los `spaces` afectados
+   por PK ascendente (origen y destino si cambia). Después bloquear `sales` existente por PK,
+   luego `reservations`, luego `space_occupancies`, cada conjunto por ID ascendente. En creación
+   no hay padre financiero previo: crear venta/ocupación/reserva bajo el espacio ya bloqueado.
+   Bloqueos de mantenimiento siguen espacios → space_blocks → ocupación, sin venta.
+3. Releer y comprobar pertenencia/versión bajo esos locks. Si una reprogramación concurrente
+   cambió el espacio respecto a la lectura preliminar, rollback y reinicio acotado del protocolo;
+   **no adquirir tardíamente otro espacio fuera del orden**. Conflicto de versión → 409.
+4. Si se necesita saldo, bloquear después `payments` y luego `refunds` por ID ascendente, con
+   lecturas actuales `FOR UPDATE`; no usar una instantánea anterior a esperar el padre.
+   Toda ruta que modifique ocupación sigue **espacios → venta → reserva/ocupación → pagos →
+   reembolsos**. Las rutas puramente financieras pueden seguir venta → pagos → reembolsos si
+   nunca adquieren espacios después; no llamar desde ahí a un coordinador que invierta el orden.
+5. Bajo el espacio releer conflictos, ventanas y configuración. El espacio serializa también la
+   ausencia de ocupaciones. Validar estado, permisos y versiones; escribir los documentos y
+   auditoría en la misma transacción, incrementando las versiones modificadas. Secuencias al
+   final, en orden estable por nombre. COMMIT. Reintentos de deadlock solo en helper central.
+
+Cambios de tarifa, granularidad, horarios y desactivación también bloquean el espacio antes de
+sus hijos. No invalidar reservas futuras existentes silenciosamente: rechazar el cambio hasta
+resolverlas explícitamente. Reprogramar modifica la ocupación original, no crea otra fila.
+
+### UTC, disponibilidad y medianoche
+
+`DATETIME` de ocupación es UTC; interpretar `weekday`/`TIME` en la zona IANA del estudio
+(`settings.timezone`, no la zona personal del actor). Convertir cada tramo local a UTC con las
+reglas de esa fecha; no usar un desfase constante. Validar fecha/hora ambigua o inexistente.
+Sin ventanas configuradas el espacio está **no disponible** (propuesta conservadora).
+
+**Corrección de la decisión de diseño 9:** MariaDB `TIME` sí representa `24:00:00`; no usar
+`23:59:59` como final de jornada, porque deja un hueco artificial. Ventana nocturna en dos filas:
+lunes `[22:00:00,24:00:00)` y martes `[00:00:00,02:00:00)`. El CHECK actual permite ese extremo;
+no necesita DDL. El servicio limita inicio a `[00:00,24:00)` y fin a `(00:00,24:00]`, normaliza
+24:00 como medianoche del día siguiente y verifica cobertura continua de todos los tramos.
+El tipo TIME por sí solo admite negativos y horas >24, y el CHECK solo compara fin/inicio:
+**el dominio de reloj local y la ausencia de ventanas solapadas quedan en servicio**.
+
+Granularidad propuesta: segundos cero, duración múltiplo de `spaces.block_minutes` y comienzo
+alineado a ese bloque desde medianoche local (conversión UTC posterior). Validar las ventanas
+al configurarlas, fusionar ventanas adyacentes para cobertura y rechazar solapadas; para un
+cruce de día comprobar ambos días. No asumir que el CHECK de bloque >0 impone estas reglas.
+No admitir reservas retrospectivas salvo ADMIN con motivo auditado, como manda §12.
+
+### Consultas de rango e índices (sin índices nuevos)
+
+```sql
+-- Tras bloquear spaces: conflicto real; excluir la propia ocupación al reprogramar.
+SELECT id FROM space_occupancies
+ WHERE space_id = :space AND status IN ('CONFIRMED','IN_PROGRESS')
+   AND start_at < :new_end AND end_at > :new_start AND id <> :own_occupancy
+ FOR UPDATE;
+-- idx_space_occupancies_conflict(space_id,status,start_at,end_at).
+-- En creación omitir exclusión (no existe own_occupancy).
+
+-- Calendario de espacios, con proyección mínima sin cliente, notas ni importes.
+SELECT id, space_id, start_at, end_at, kind, status FROM space_occupancies
+ WHERE start_at < :visible_end AND end_at > :visible_start
+ ORDER BY start_at, id;
+-- idx_space_occupancies_range(start_at,end_at).
+-- Con filtro space_id y estados bloqueantes: índice de conflictos.
+
+-- Reservas propias dentro del rango visible (no cargar todo el histórico).
+SELECT r.id, o.space_id, o.start_at, o.end_at, r.status
+ FROM reservations r JOIN space_occupancies o ON o.id = r.occupancy_id
+ WHERE r.responsible_id = :actor
+   AND o.start_at < :visible_end AND o.end_at > :visible_start
+ ORDER BY o.start_at, r.id;
+-- idx_reservations_responsible + PK de ocupación, o rango de ocupación
+-- + uq_reservations_occupancy; el optimizador elige según cardinalidad.
+
+SELECT weekday, local_start_time, local_end_time FROM space_hours
+ WHERE space_id = :space AND weekday IN (:day1, :day2)
+ ORDER BY weekday, local_start_time;
+-- uq_space_hours(space_id,weekday,local_start_time) / idx_space_hours_space.
+```
+
+`end_at` suele ser filtro residual: un B-tree no resuelve simultáneamente ambos extremos del
+intervalo. Ordenar agenda puede requerir filesort; no justifica otro índice con tablas vacías.
+La BD solo evita duplicados **exactos** bloqueantes, no solapamientos parciales. Sigue siendo
+riesgo del servicio; requiere la prueba de dos conexiones reales del criterio E antes del cierre.
+
+### Comprobación de lectura y bloqueos externos (2026-10-28)
+
+- MariaDB local real **10.4.32**, usuario de aplicación: metadatos de las cinco tablas coinciden
+  en `gestion` y `gestion_test`, todas InnoDB/utf8mb4_unicode_ci, tipos/defaults y únicos indicados.
+  Las cinco tablas tienen **0 filas en ambas bases** en el momento de revisar. No se ejecutó
+  DDL, DML, seeds, cambios de configuración ni pruebas de escritura/concurrencia.
+- `SELECT CAST('24:00:00' AS TIME)` devuelve `24:00:00` y 86400 segundos. `SHOW CREATE TABLE`
+  confirma CHECK de orden y únicos de reserva. Esto verifica representación, no una inserción.
+- EXPLAIN en `gestion`: conflictos usa `idx_space_occupancies_conflict`; rango global usa
+  `idx_space_occupancies_range` con filesort; agenda propia elige ocupaciones y lookup único
+  de reserva. Con tablas vacías esos planes no certifican rendimiento a volumen real.
+- La sesión del cliente SQL directo sigue `time_zone=SYSTEM` y modo no estricto: la conexión
+  de aplicación debe imponer UTC/modo estricto. Las pruebas locales previas de CHECK no
+  certifican la versión/privilegios/configuración del hosting.
+- **Pendiente de operación:** configurar al menos un espacio real, sus tarifas/horarios y
+  confirmar zona IANA, granularidad y reglas propuestas. No sembrar una sala/tarifa ficticia
+  como producción. El dataset demo sigue separado. El inventario real del hosting y sus
+  restricciones CHECK, configuración UTC, BCMath y capacidad transaccional siguen sin validar;
+  no se consideran resueltos por esta revisión local. Registrar propuestas en decisiones antes
+  de integrar políticas distintas.

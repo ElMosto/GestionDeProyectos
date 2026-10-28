@@ -302,6 +302,53 @@ final class Authorizer
             && ($task['stage_id'] === null || $this->role() === Role::COLABORADOR);
     }
 
+    /**
+     * §5, §12: fila confiable del repositorio; ADMIN o responsable activo.
+     * El histórico sigue visible. La ocupación mínima no usa esta política.
+     * @param array<string, mixed>|null $reservation
+     */
+    public function canViewReservation(?array $reservation): bool
+    {
+        return $this->hasActiveActor()
+            && $reservation !== null
+            && ($this->isAdmin()
+                || ($this->can(Capabilities::RESERVATIONS_VIEW_OWN)
+                    && $this->actorMatches($reservation['responsible_id'] ?? null)));
+    }
+
+    /**
+     * §12: reprogramar y transiciones; estado, versión y bloqueos van en servicio.
+     * No concede cancelación ni permite cambiar responsable.
+     * @param array<string, mixed>|null $reservation
+     */
+    public function canManageReservation(?array $reservation): bool
+    {
+        return $this->canViewReservation($reservation)
+            && ($this->isAdmin()
+                || ($this->can(Capabilities::RESERVATIONS_RESCHEDULE_OWN)
+                    && $this->actorMatches($reservation['responsible_id'] ?? null)));
+    }
+
+    /**
+     * D-23 / §10: cancelar reserva cancela venta; solo ADMIN, aun sin pagos.
+     * El servicio exige motivo, neto cero y cancelación coordinada sin reembolso automático.
+     * @param array<string, mixed>|null $reservation
+     */
+    public function canCancelReservation(?array $reservation): bool
+    {
+        return $this->canViewReservation($reservation)
+            && $this->isAdmin()
+            && $this->can(Capabilities::RESERVATIONS_CANCEL_ANY);
+    }
+
+    /** §5, §12: configuración, tarifas, horarios y bloqueos; solo ADMIN activo. */
+    public function canManageSpaces(): bool
+    {
+        return $this->hasActiveActor()
+            && $this->isAdmin()
+            && $this->can(Capabilities::SPACES_MANAGE);
+    }
+
     private function hasActiveActor(): bool
     {
         $user = $this->user();

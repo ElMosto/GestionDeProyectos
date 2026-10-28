@@ -9,6 +9,12 @@ use App\Core\ApiException;
 /** Aritmética monetaria exacta; BCMath verificado como requisito del despliegue. */
 final class Money
 {
+    /** §12 / D-20: duración entera; un único redondeo, sin horas aproximadas. */
+    public static function reservationTotal(string $hourlyRate, int $minutes): string
+    {
+        return self::amount(self::round(bcdiv(bcmul($hourlyRate, (string) $minutes, 8), '60', 8)));
+    }
+
     public static function add(string $a, string $b): string
     {
         return bcadd($a, $b, 2);

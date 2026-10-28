@@ -4,6 +4,7 @@
  */
 
 export const PAGE_SIZE = 25;
+export const RESERVATION_STATUSES = ['CONFIRMED', 'IN_PROGRESS', 'FINISHED', 'CANCELLED'];
 
 export const PROJECT_STATUSES = ['BORRADOR', 'PLANIFICADO', 'EN_CURSO', 'PAUSADO', 'FINALIZADO', 'CANCELADO'];
 export const TASK_STATUSES = ['PENDIENTE', 'EN_CURSO', 'BLOQUEADA', 'COMPLETADA', 'CANCELADA'];
@@ -18,6 +19,7 @@ const WORK_LABELS = {
     SIN_CARGO: 'Sin cargo', NO_PAGADO: 'No pagado',
     EMITIDA: 'Emitida', ORDINARIA: 'Ordinaria', RESERVA: 'Reserva',
     VALID: 'Válido', VOID: 'Anulado', EFFECTIVE: 'Efectivo',
+    CONFIRMED: 'Confirmada', IN_PROGRESS: 'En curso', FINISHED: 'Finalizada', CANCELLED: 'Cancelada',
 };
 export const workLabel = (code) => WORK_LABELS[code] ?? code ?? '—';
 export const workOptions = (codes) => codes.map((value) => ({ value, label: workLabel(value) }));

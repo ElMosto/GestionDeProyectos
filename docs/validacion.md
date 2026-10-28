@@ -1,8 +1,41 @@
 # Validación y criterios de aceptación
 
-Evidencia local acumulada de fases 1–3.
+Evidencia local acumulada de fases 1–4.
 **No certificado para despliegue**:
 falta inventario real del hosting (`docs/hosting.md`). No se ocultan pruebas fallidas ni skips.
+
+## Fase 4 — verificada localmente
+
+- Revisión de esquema: no requiere migración 009; ver sección fase 4 de `docs/esquema.md`.
+- Políticas de reservas implementadas; cancelar coordina una venta y queda reservado a ADMIN
+  (D-23). Capacidad del líder alineada con esa regla, sin conceder cancelación por UI.
+- QA entregó 37 pruebas de espacios/reservas/concurrencia; integración ejecutada y verde.
+- Regresiones adicionales: agenda privada incluso para ADMIN y ajuste de reserva cobrada
+  restringido a ADMIN cuando cambia el importe (D-15). Mover solo el horario conserva acceso
+  del responsable y no cambia los importes.
+- Contrato OpenAPI 0.6.0 ampliado aditivamente; `/agenda` conserva tareas y la nueva ruta
+  `/agenda/reservations` proyecta solo reservas propias, sin notas ni importes.
+- Suite acumulada: **301 pruebas / 5.285 aserciones**, sin fallos ni skips; repetida con
+  semillas aleatorias **20261028** y **20261029**. Comando:
+  `php vendor/bin/phpunit --order-by=random --random-order-seed=20261028`.
+- Criterio **E**: `SpacesApiTest`, `ReservationsApiTest`, `ReservationConcurrencyTest`,
+  `ReservationAgendaTest`, `ReservationPaidAdjustmentTest` y políticas por objeto.
+  Las tres carreras reales verifican mismo hueco, replay de la misma clave y reserva contra
+  mantenimiento con mutex retenido y dos conexiones observadas en MariaDB. Los huecos
+  adyacentes y espacios distintos se comprueban además en la suite funcional.
+- `node tests/Browser/phase4.mjs`: **40 comprobaciones reales PHP/MariaDB/Chromium**:
+  detalle y notas literales, conflicto con mantenimiento, reprogramación libre, agenda propia,
+  rangos día/semana, rechazo de ID ajeno, calendario mínimo, móvil, cancelación ADMIN,
+  creación manual de espacio y ventana hasta `24:00:00`.
+- Regresión secuencial completa de navegador: **18 + 52 + 56 + 40 = 166** comprobaciones.
+- Se corrigió el alias de referencia pendiente al limpiar workers y se añadió confirmación
+  explícita de recepción del resultado financiero por sockets Windows. El fallo intermitente
+  inicial no se ocultó: tras corregirlo, cinco ejecuciones aisladas y dos suites aleatorias verdes.
+- Lint: **180 archivos PHP**, **30 módulos JS**, correctos. OpenAPI **0.6.0** válido
+  con cinco avisos heredados; Composer audit sin vulnerabilidades; diff sin errores.
+- Certificación de hosting e impresora térmica física: pendientes documentados, no inferidos
+  de las pruebas locales. Configurar el espacio real, tarifas y horarios mediante ADMIN antes
+  de utilizar reservas; no se insertaron valores comerciales ficticios en desarrollo.
 
 ## Fase 3 — verificada localmente
 

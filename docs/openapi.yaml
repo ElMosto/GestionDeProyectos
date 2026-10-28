@@ -1,14 +1,15 @@
 openapi: 3.1.0
 info:
   title: Gestión de Proyectos — Estudio Musical
-  version: 0.5.0
+  version: 0.6.0
   description: |
     API del sistema de gestión del estudio musical.
 
-    Estado: fases 1-3. Autenticación, perfil, usuarios, clientes, proyectos,
+    Estado: fases 1-4. Autenticación, perfil, usuarios, clientes, proyectos,
     etapas, membresías, tareas, cargos, agenda propia de tareas, catálogos,
-    ventas, pagos, anulaciones, reembolsos y ticket de venta.
-    Reservas, reuniones, dashboard y gastos quedan para fases posteriores.
+    ventas, pagos, anulaciones, reembolsos, ticket de venta, espacios, horarios,
+    reservas, bloqueos y agenda propia de reservas.
+    Reuniones, dashboard y gastos quedan para fases posteriores.
 
     Convenciones vinculantes (ver `docs/api-movil.md`):
     - Importes y cantidades como **string** decimal.
@@ -49,13 +50,17 @@ tags:
   - name: tareas
     description: Tareas de proyecto, independientes y comentarios (§8)
   - name: agenda
-    description: Proyección propia paginada de tareas; sin reuniones ni reservas en fase 2 (§13)
+    description: Proyecciones propias paginadas; /agenda conserva tareas y /agenda/reservations añade reservas (§13)
   - name: catalogo
     description: Productos y extras; lectura autenticada, gestión solo ADMIN (§10)
   - name: ventas
     description: Ventas propias o todas para ADMIN; snapshots al emitir (§10)
   - name: pagos
     description: Ledger único de ventas y proyectos; anulación y reembolso solo ADMIN (§11)
+  - name: espacios
+    description: Espacios, horarios locales IANA y calendario mínimo de ocupaciones (§12)
+  - name: reservas
+    description: Reservas BANDA propias; ADMIN ve todas. Una sola venta por reserva (§12, D-20–23)
 
 paths:
   /auth/csrf:
@@ -122,6 +127,13 @@ paths:
       tags: [acceso]
       operationId: getIdentity
       summary: Identidad y capacidades de la cuenta autenticada
+      description: |
+        capabilities es un mapa plano acción → boolean para gatear UI, nunca una
+        autorización. En fase 4 incluye acciones de espacios y reservas, por ejemplo
+        spaces.manage, spaces.viewOccupancy, reservations.create,
+        reservations.viewOwn, reservations.rescheduleOwn, reservations.cancelAny
+        y reservations.retroactive. Ver calendario general no concede acceso al DTO
+        de reserva ajena; cancelar reserva exige ADMIN por D-23. Mismo mapa con Bearer.
       responses:
         '200': {$ref: '#/components/responses/Session'}
         '401': {$ref: '#/components/responses/Unauthenticated'}
@@ -1912,6 +1924,10 @@ paths:
         de SaleService::ticketData y escapa HTML. CSS/script locales de impresión.
         Reimprimir no emite ni modifica dinero, aun cuando audita SALE_TICKET_VIEW.
         Comprobante interno MXN, no factura fiscal. paper inválido da 422 JSON.
+        Si la venta procede de una reserva, puede añadir un bloque de impresión
+        con espacio, intervalo, duración en minutos enteros y tarifa histórica
+        como string decimal de dos posiciones. Es contenido HTML opcional, no
+        cambia el contrato ni crea un endpoint JSON de ticket para móvil.
       parameters:
         - name: paper
           in: query
@@ -1927,6 +1943,440 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
 
+  /spaces:
+    get:
+      tags: [espacios]
+      operationId: listSpaces
+      summary: Listar espacios con paginación
+      description: |
+        Lectura autenticada con cookie o Bearer. Lista blanca de filtros q, active,
+        limit y offset. hourly_rate solo se incluye para ADMIN; no incluye hours
+        de detalle. Ver todos los espacios no autoriza ver reservas ajenas.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/ReservationSearch'
+        - name: active
+          in: query
+          description: Filtrar activos (1) o inactivos (0).
+          schema: {type: string, enum: ['0', '1']}
+      responses:
+        '200': {$ref: '#/components/responses/SpacePage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [espacios]
+      operationId: createSpace
+      summary: Crear espacio (ADMIN)
+      description: |
+        Exige tarifa explícita; no inventa horarios ni configura un espacio demo.
+        Sin ventanas configuradas no hay disponibilidad. No crea ocupación.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SpaceCreate'}
+            example: {name: Sala principal, hourly_rate: '250.00', block_minutes: 30}
+      responses:
+        '201': {$ref: '#/components/responses/SpaceResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /spaces/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [espacios]
+      operationId: getSpace
+      summary: Consultar espacio y ventanas semanales
+      description: Lectura autenticada; hourly_rate solo ADMIN, con el mismo recorte para Bearer.
+      responses:
+        '200': {$ref: '#/components/responses/SpaceResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [espacios]
+      operationId: updateSpace
+      summary: Editar configuración del espacio (ADMIN)
+      description: |
+        Versión del espacio obligatoria, por cuerpo o If-Match. Bloquea el espacio;
+        rechaza desactivación o cambio de granularidad con ocupaciones futuras
+        bloqueantes. Cambiar tarifa no altera snapshots de reservas existentes.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SpaceUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/SpaceResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /spaces/{id}/hours:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    put:
+      tags: [espacios]
+      operationId: replaceSpaceHours
+      summary: Sustituir ventanas semanales (ADMIN)
+      description: |
+        Versión del espacio obligatoria. Horas civiles en zona IANA configurada del
+        estudio, no timestamps RFC 3339 ni zona personal. Sin ventanas no hay
+        disponibilidad. Se permiten adyacentes y se rechazan solapadas. Dividir
+        cruces de medianoche en dos filas; 24:00:00 es extremo final válido.
+        Rechaza cambios con ocupaciones futuras bloqueantes. Las reglas DST se
+        validan en servidor al resolver cada fecha; no se asume desfase fijo.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SpaceHoursReplace'}
+            example:
+              version: '1'
+              hours: [{weekday: 1, local_start_time: '09:00:00', local_end_time: '24:00:00'}]
+      responses:
+        '200': {$ref: '#/components/responses/SpaceResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /spaces/{id}/availability:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [espacios]
+      operationId: getSpaceAvailability
+      summary: Consultar ventanas y ocupaciones mínimas en rango ISO
+      description: |
+        Rango obligatorio [from,to) de instantes con zona, positivo y máximo 31 días.
+        windows son ventanas de apertura, no huecos garantizados ni reservas.
+        Calendario de ocupaciones accesible a usuarios autenticados con datos mínimos,
+        sin banda, responsable, notas privadas, tarifa, total ni saldo. No amplía
+        permiso para consultar el DTO de una reserva ajena. guaranteed siempre false.
+        Solo la escritura transaccional que toma el mutex del espacio y revalida
+        space_occupancies garantiza exclusión; esta consulta/previsualización no.
+      parameters:
+        - $ref: '#/components/parameters/AvailabilityFrom'
+        - $ref: '#/components/parameters/AvailabilityTo'
+      responses:
+        '200': {$ref: '#/components/responses/SpaceAvailabilityResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /reservations:
+    get:
+      tags: [reservas]
+      operationId: listReservations
+      summary: Listar reservas autorizadas
+      description: |
+        ADMIN ve todas; los demás solo aquellas de las que son responsables.
+        Lista blanca q, status, band_client_id, space_id, from, to, limit y offset.
+        from/to son instantes ISO con zona y filtran por solape [from,to), no DATE.
+        No permite elegir responsable para ampliar acceso; sin contactos privados.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/ReservationSearch'
+        - $ref: '#/components/parameters/ReservationStatusFilter'
+        - $ref: '#/components/parameters/ReservationSpaceFilter'
+        - $ref: '#/components/parameters/ReservationBandFilter'
+        - $ref: '#/components/parameters/ReservationFrom'
+        - $ref: '#/components/parameters/ReservationTo'
+      responses:
+        '200': {$ref: '#/components/responses/ReservationPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [reservas]
+      operationId: createReservation
+      summary: Confirmar reserva y emitir su única venta
+      description: |
+        Solo actores autorizados a crear reservas. Cliente BANDA activo obligatorio;
+        responsable = actor. Rechaza owner/responsible_id, status, type, sale_id,
+        occupancy_id, tarifa, precio y total enviados por el cliente.
+        Crea reserva/ocupación CONFIRMED y exactamente una venta RESERVA/EMITIDA con
+        partida cantidad 1.000 y precio igual al total calculado. No registra pago.
+        No existe BORRADOR persistido de reserva. Cobrar por sale_id, sin otro ledger.
+        Exige segundos cero, extremos alineados al block_minutes del espacio desde
+        medianoche local IANA del estudio y duración UTC múltiplo de ese bloque.
+        No presupone 30 minutos para todos los espacios. Sin ventanas no hay hueco;
+        extremos de ventanas DST ambiguos/inexistentes se rechazan.
+        Retrospectivas solo ADMIN con reason auditado. Importe calculado en backend:
+        tarifa histórica × minutos enteros / 60, redondeo único final a dos decimales.
+        Idempotencia, autorización y mutex de espacio se comprueban en transacción;
+        replay reautoriza acceso actual antes de devolver el resultado original.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ReservationIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReservationCreate'}
+            example: {band_client_id: '12', space_id: '2', start_at: '2026-11-02T10:00:00-06:00', end_at: '2026-11-02T11:30:00-06:00', notes: Ensayo}
+      responses:
+        '201': {$ref: '#/components/responses/ReservationResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /reservations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [reservas]
+      operationId: getReservation
+      summary: Consultar reserva propia o cualquier reserva como ADMIN
+      description: |
+        Reautoriza por objeto incluso con Bearer. Invisibles producen 404 sin datos
+        financieros. El detalle añade financial_summary del ledger de su sale_id;
+        no incluye contactos privados ni habilita acceso a la banda por conocer su ID.
+      responses:
+        '200': {$ref: '#/components/responses/ReservationResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [reservas]
+      operationId: updateReservationNotes
+      summary: Editar exclusivamente notas de reserva
+      description: |
+        Solo ADMIN o responsable autorizado. Versión de reserva obligatoria y clave
+        idempotente también para notas. Rechaza horarios, espacio, responsable,
+        estado, tarifa, precio, total y demás campos ajenos a esta operación.
+        Nunca permite evitar el coordinador de reprogramación con un PATCH genérico.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ReservationIdempotencyKey'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReservationNotesUpdate'}
+            example: {version: '1', notes: null}
+      responses:
+        '200': {$ref: '#/components/responses/ReservationResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /reservations/{id}/reschedule:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    post:
+      tags: [reservas]
+      operationId: rescheduleReservation
+      summary: Reprogramar bajo bloqueo y recalcular venta vinculada
+      description: |
+        Solo ADMIN o responsable autorizado según estado y reglas financieras;
+        con cobros, un ajuste comercial exige ADMIN. Exige versión de reserva.
+        Revalida horarios, estado y solapamiento bajo mutex de los espacios origen
+        y destino en orden de ID. Mismo espacio conserva tarifa histórica; distinto
+        espacio adopta tarifa vigente de destino (D-21). Backend recalcula total,
+        que nunca puede ser inferior al neto cobrado. Mantiene IDs de reserva,
+        ocupación, venta y partida, folio e issued_at. No registra pagos/reembolsos.
+        Retrospectivas solo ADMIN con motivo; misma granularidad configurable de creación.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ReservationIdempotencyKey'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReservationReschedule'}
+            example: {version: '1', space_id: '2', start_at: '2026-11-02T12:00:00-06:00', end_at: '2026-11-02T13:30:00-06:00'}
+      responses:
+        '200': {$ref: '#/components/responses/ReservationResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /reservations/{id}/transitions:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    post:
+      tags: [reservas]
+      operationId: transitionReservation
+      summary: Iniciar o finalizar uso del espacio
+      description: |
+        ADMIN o responsable autorizado. Versión de reserva obligatoria.
+        CONFIRMED → IN_PROGRESS → FINISHED; cancelación por su ruta dedicada.
+        Estados públicos en inglés; etiquetas españolas pertenecen a presentación.
+        CONFIRMED e IN_PROGRESS bloquean incluso sin pago; uso y cobro independientes.
+        Sin caducidad automática ni cambio de estado financiero implícito.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ReservationIdempotencyKey'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReservationTransition'}
+            example: {version: '2', status: IN_PROGRESS}
+      responses:
+        '200': {$ref: '#/components/responses/ReservationResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /reservations/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    post:
+      tags: [reservas]
+      operationId: cancelReservation
+      summary: Cancelar reserva y venta coordinadamente (ADMIN)
+      description: |
+        Exclusivamente ADMIN, incluso sin pagos (D-23). Exige versión de reserva,
+        reason auditado y neto cobrado cero. Si hay saldo cobrado, resolver antes por
+        operaciones explícitas autorizadas de reembolso/anulación; no simular devolución
+        anulando un pago efectivo. No reembolsa automáticamente ni inventa penalización.
+        Bajo mutex cancela reserva/ocupación y venta sin borrar historia; libera espacio.
+        No usar la cancelación aislada de ventas para una venta RESERVA.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ReservationIdempotencyKey'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReservationCancel'}
+            example: {version: '3', reason: Cancelación solicitada y saldo resuelto}
+      responses:
+        '200': {$ref: '#/components/responses/ReservationResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /space-blocks:
+    get:
+      tags: [espacios]
+      operationId: listSpaceBlocks
+      summary: Listar bloqueos de mantenimiento (ADMIN)
+      description: |
+        Paginado; filtros permitidos space_id, status, from, to, limit y offset.
+        from/to son instantes con zona y filtran por solape. Motivo solo ADMIN;
+        el resto ve únicamente proyección mínima en calendario de disponibilidad.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/ReservationSpaceFilter'
+        - $ref: '#/components/parameters/ReservationStatusFilter'
+        - $ref: '#/components/parameters/ReservationFrom'
+        - $ref: '#/components/parameters/ReservationTo'
+      responses:
+        '200': {$ref: '#/components/responses/SpaceBlockPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [espacios]
+      operationId: createSpaceBlock
+      summary: Bloquear espacio por mantenimiento (ADMIN)
+      description: |
+        Crea ocupación MAINTENANCE/CONFIRMED en transacción idempotente con el mismo
+        mutex y comprobación de conflictos que las reservas. No genera venta ni cobro.
+        Rango positivo máximo 31 días y espacio activo; mantenimiento no depende
+        de ventanas comerciales ni de la granularidad de reservas.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ReservationIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SpaceBlockCreate'}
+            example: {space_id: '2', start_at: '2026-11-03T10:00:00-06:00', end_at: '2026-11-03T11:00:00-06:00', reason: Mantenimiento}
+      responses:
+        '201': {$ref: '#/components/responses/SpaceBlockResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /space-blocks/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    post:
+      tags: [espacios]
+      operationId: cancelSpaceBlock
+      summary: Cancelar bloqueo y liberar ocupación (ADMIN)
+      description: Versión del bloqueo obligatoria; cancelación bajo mutex, sin borrar historia.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ReservationIdempotencyKey'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SpaceBlockCancel'}
+            example: {version: '1', reason: Mantenimiento concluido}
+      responses:
+        '200': {$ref: '#/components/responses/SpaceBlockResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReservationConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /agenda/reservations:
+    get:
+      tags: [agenda]
+      operationId: getOwnReservationAgenda
+      summary: Agenda mínima de reservas propias en rango DATE
+      description: |
+        Solo reservas propias, incluso para ADMIN; excluye canceladas. from/to son
+        DATE inclusivos interpretados en zona personal del actor, máximo 31 días,
+        a diferencia del rango ISO de disponibilidad y listado de reservas.
+        Lista blanca from, to, limit, offset. Paginación con total; title genérico
+        incluye nombre del espacio, nunca banda, notas privadas, tarifa, total ni saldo.
+        No permite consultar otro responsable. No modifica /agenda ni su contrato
+        TASK/TASKS_PHASE_2; la UI fusiona explícitamente las proyecciones paginadas.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: from
+          in: query
+          required: true
+          description: Primer día local inclusivo del rango visible.
+          schema: {type: string, format: date}
+          example: '2026-11-01'
+        - name: to
+          in: query
+          required: true
+          description: Último día local inclusivo; rango máximo 31 días.
+          schema: {type: string, format: date}
+          example: '2026-11-07'
+      responses:
+        '200': {$ref: '#/components/responses/ReservationAgendaPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
 components:
   securitySchemes:
     cookieAuth:
@@ -1940,6 +2390,230 @@ components:
       description: Token opaco de dispositivo (Android). Sin JWT.
 
   schemas:
+    SpaceFields:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        description: {type: [string, 'null'], maxLength: 10000}
+        hourly_rate: {$ref: '#/components/schemas/ProjectMoney'}
+        block_minutes: {type: integer, minimum: 1, maximum: 1440, default: 30}
+        active: {type: boolean, default: true}
+    SpaceCreate:
+      allOf:
+        - $ref: '#/components/schemas/SpaceFields'
+      required: [name, hourly_rate]
+      unevaluatedProperties: false
+    SpaceUpdate:
+      allOf:
+        - $ref: '#/components/schemas/SpaceFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+      description: Versión del espacio obligatoria en version, expected_version o If-Match; varias deben coincidir.
+      unevaluatedProperties: false
+    SpaceHour:
+      type: object
+      additionalProperties: false
+      required: [weekday, local_start_time, local_end_time]
+      description: |
+        Ventana semiabierta civil del estudio. Fin posterior al inicio. No es
+        RFC 3339 time (sin zona); 24:00:00 solo como final de jornada.
+      properties:
+        weekday: {type: integer, minimum: 1, maximum: 7, description: Día ISO; lunes 1 y domingo 7.}
+        local_start_time:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]:00$'
+          examples: ['09:00:00']
+        local_end_time:
+          type: string
+          pattern: '^(([01][0-9]|2[0-3]):[0-5][0-9]:00|24:00:00)$'
+          examples: ['24:00:00']
+    SpaceHoursReplace:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          required: [hours]
+          properties:
+            hours:
+              type: array
+              maxItems: 100
+              items: {$ref: '#/components/schemas/SpaceHour'}
+      unevaluatedProperties: false
+    Space:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, block_minutes, active, version]
+      description: |
+        DTO autorizado; tarifa opcional solo ADMIN, nunca para otras cuentas.
+        hours se incluye solo en detalle. IDs/version strings; minutos enteros.
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        name: {type: string}
+        description: {type: [string, 'null']}
+        block_minutes: {type: integer, minimum: 1, maximum: 1440}
+        active: {type: boolean}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        hourly_rate: {$ref: '#/components/schemas/ProjectMoney'}
+        hours: {type: array, items: {$ref: '#/components/schemas/SpaceHour'}}
+    ReservationStatus:
+      type: string
+      enum: [CONFIRMED, IN_PROGRESS, FINISHED, CANCELLED]
+      description: No existe borrador persistido; solo CONFIRMED e IN_PROGRESS bloquean.
+    SpaceInterval:
+      type: object
+      required: [start_at, end_at]
+      properties:
+        start_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+        end_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+    SpaceCalendarOccupancy:
+      allOf:
+        - $ref: '#/components/schemas/SpaceInterval'
+        - type: object
+          required: [id, space_id, kind, status]
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            space_id: {$ref: '#/components/schemas/ProjectId'}
+            kind: {type: string, enum: [RESERVATION, MAINTENANCE, MEETING]}
+            status: {$ref: '#/components/schemas/ReservationStatus'}
+      unevaluatedProperties: false
+      description: Proyección estrictamente mínima, sin banda, notas, responsable ni campos financieros.
+    SpaceAvailability:
+      type: object
+      additionalProperties: false
+      required: [space_id, timezone, windows, occupancies, guaranteed]
+      properties:
+        space_id: {$ref: '#/components/schemas/ProjectId'}
+        timezone: {type: string, description: Identificador IANA configurado del estudio., examples: [America/Mexico_City]}
+        windows:
+          type: array
+          description: Ventanas de apertura recortadas al rango solicitado; no restan ocupaciones ni garantizan hueco.
+          items:
+            allOf:
+              - $ref: '#/components/schemas/SpaceInterval'
+            unevaluatedProperties: false
+        occupancies:
+          type: array
+          items: {$ref: '#/components/schemas/SpaceCalendarOccupancy'}
+        guaranteed: {type: boolean, const: false}
+    ReservationScheduleFields:
+      allOf:
+        - $ref: '#/components/schemas/SpaceInterval'
+        - type: object
+          properties:
+            space_id: {$ref: '#/components/schemas/ProjectId'}
+            reason: {type: string, minLength: 1, maxLength: 255, description: Obligatorio para retrospectivas ADMIN; auditado.}
+    ReservationCreate:
+      allOf:
+        - $ref: '#/components/schemas/ReservationScheduleFields'
+        - type: object
+          required: [band_client_id, space_id]
+          properties:
+            band_client_id: {$ref: '#/components/schemas/ProjectId'}
+            notes: {type: [string, 'null'], maxLength: 10000}
+      unevaluatedProperties: false
+      description: Responsable, estado, tarifa, precio y total asignados exclusivamente por el servidor.
+    ReservationReschedule:
+      allOf:
+        - $ref: '#/components/schemas/ReservationScheduleFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+      required: [space_id]
+      unevaluatedProperties: false
+      description: Exige versión de reserva por cuerpo o If-Match; no admite total ni tarifa enviados.
+    ReservationNotesUpdate:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          required: [notes]
+          properties:
+            notes: {type: [string, 'null'], maxLength: 10000}
+      unevaluatedProperties: false
+    ReservationTransition:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          required: [status]
+          properties:
+            status: {type: string, enum: [IN_PROGRESS, FINISHED]}
+            reason: {type: string, minLength: 1, maxLength: 255}
+      unevaluatedProperties: false
+    ReservationCancel:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          required: [reason]
+          properties:
+            reason: {type: string, minLength: 1, maxLength: 255}
+      unevaluatedProperties: false
+    Reservation:
+      allOf:
+        - $ref: '#/components/schemas/SpaceInterval'
+        - type: object
+          required: [id, occupancy_id, band_client_id, band_name, space_id, space_name, sale_id, responsible_id, hourly_rate_snapshot, total, status, notes, version, created_at, updated_at]
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            occupancy_id: {$ref: '#/components/schemas/ProjectId'}
+            band_client_id: {$ref: '#/components/schemas/ProjectId'}
+            band_name: {type: string}
+            space_id: {$ref: '#/components/schemas/ProjectId'}
+            space_name: {type: string}
+            sale_id: {$ref: '#/components/schemas/ProjectId'}
+            responsible_id: {$ref: '#/components/schemas/ProjectId'}
+            hourly_rate_snapshot: {$ref: '#/components/schemas/ProjectMoney'}
+            duration_minutes: {type: integer, minimum: 1, description: Duración real entre los instantes UTC en minutos.}
+            total: {$ref: '#/components/schemas/ProjectMoney'}
+            status: {$ref: '#/components/schemas/ReservationStatus'}
+            notes: {type: [string, 'null']}
+            version: {$ref: '#/components/schemas/ProjectVersion'}
+            created_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            updated_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            financial_summary: {$ref: '#/components/schemas/FinancialSummary'}
+      unevaluatedProperties: false
+      description: |
+        Solo ADMIN o responsable autorizado; campos financieros filtrados por objeto
+        en servidor, también con Bearer. No se usa como evento de calendario general.
+        Detalle añade financial_summary; sin contactos ni notas privadas del cliente.
+    SpaceBlockCreate:
+      allOf:
+        - $ref: '#/components/schemas/SpaceInterval'
+        - type: object
+          required: [space_id, reason]
+          properties:
+            space_id: {$ref: '#/components/schemas/ProjectId'}
+            reason: {type: string, minLength: 1, maxLength: 255}
+      unevaluatedProperties: false
+    SpaceBlockCancel:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          properties:
+            reason: {type: string, minLength: 1, maxLength: 255}
+      unevaluatedProperties: false
+    SpaceBlock:
+      allOf:
+        - $ref: '#/components/schemas/SpaceInterval'
+        - type: object
+          required: [id, occupancy_id, space_id, status, reason, version]
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            occupancy_id: {$ref: '#/components/schemas/ProjectId'}
+            space_id: {$ref: '#/components/schemas/ProjectId'}
+            status: {$ref: '#/components/schemas/ReservationStatus'}
+            reason: {type: string}
+            version: {$ref: '#/components/schemas/ProjectVersion'}
+      unevaluatedProperties: false
+      description: DTO exclusivo ADMIN; no reutilizarlo para calendario mínimo.
+    ReservationAgendaEntry:
+      allOf:
+        - $ref: '#/components/schemas/SpaceInterval'
+        - type: object
+          required: [id, reservation_id, kind, title, status, space_id]
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            reservation_id: {$ref: '#/components/schemas/ProjectId'}
+            kind: {type: string, const: RESERVATION}
+            title: {type: string, description: 'Título genérico con nombre de espacio, sin banda ni notas.'}
+            status: {type: string, enum: [CONFIRMED, IN_PROGRESS, FINISHED]}
+            space_id: {$ref: '#/components/schemas/ProjectId'}
+      unevaluatedProperties: false
+      description: Evento propio mínimo sin importes, datos de cliente ni notas privadas.
     FinanceVersionInput:
       type: object
       additionalProperties: false
@@ -2987,6 +3661,61 @@ components:
                 $ref: '#/components/schemas/DuplicateWarning'
 
   parameters:
+    ReservationIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Obligatoria en TODA escritura de reservas y bloqueos, incluidas notas,
+        transiciones y cancelaciones. ASCII imprimible sin espacios, 1–100.
+        Alcance actor+operación; misma clave y petición devuelve resultado original
+        tras reautorizar acceso actual. Contenido distinto da 409 IDEMPOTENCY_KEY_REUSED.
+        Efecto y respuesta se persisten en la misma transacción; replay no crea otra venta.
+      schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[!-~]+$'}
+      example: reserva-20261102-001
+    ReservationSearch:
+      name: q
+      in: query
+      description: Búsqueda de texto dentro de los objetos autorizados; no amplía visibilidad.
+      schema: {type: string, maxLength: 120}
+    ReservationStatusFilter:
+      name: status
+      in: query
+      schema: {$ref: '#/components/schemas/ReservationStatus'}
+    ReservationSpaceFilter:
+      name: space_id
+      in: query
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    ReservationBandFilter:
+      name: band_client_id
+      in: query
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    ReservationFrom:
+      name: from
+      in: query
+      description: Instante inferior inclusivo para solape, no DATE; con to exige to mayor que from.
+      schema: {$ref: '#/components/schemas/FinanceTimestamp'}
+      example: '2026-11-02T00:00:00-06:00'
+    ReservationTo:
+      name: to
+      in: query
+      description: Instante superior exclusivo para solape, no DATE.
+      schema: {$ref: '#/components/schemas/FinanceTimestamp'}
+      example: '2026-11-03T00:00:00-06:00'
+    AvailabilityFrom:
+      name: from
+      in: query
+      required: true
+      description: Inicio inclusivo ISO con zona; rango positivo máximo 31 días.
+      schema: {$ref: '#/components/schemas/FinanceTimestamp'}
+      example: '2026-11-02T00:00:00-06:00'
+    AvailabilityTo:
+      name: to
+      in: query
+      required: true
+      description: Fin exclusivo ISO con zona; posterior a from, máximo 31 días.
+      schema: {$ref: '#/components/schemas/FinanceTimestamp'}
+      example: '2026-11-03T00:00:00-06:00'
     CatalogSearch:
       name: q
       in: query
@@ -3135,6 +3864,115 @@ components:
         pattern: '^[0-9]+$'
 
   responses:
+    SpaceResource:
+      description: Espacio con ventanas semanales; tarifa solo ADMIN.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Space'}
+    SpacePage:
+      description: Página de espacios; sin hours, tarifa solo ADMIN.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/Space'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+    SpaceAvailabilityResource:
+      description: |
+        Calendario mínimo en rango acotado, no paginado; guaranteed=false.
+        Sin datos financieros ni del cliente; ventanas no garantizan disponibilidad.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/SpaceAvailability'}
+          example:
+            data:
+              space_id: '2'
+              timezone: America/Mexico_City
+              windows: [{start_at: '2026-11-02T15:00:00Z', end_at: '2026-11-03T00:00:00Z'}]
+              occupancies: [{id: '9', space_id: '2', start_at: '2026-11-02T16:00:00Z', end_at: '2026-11-02T17:30:00Z', kind: RESERVATION, status: CONFIRMED}]
+              guaranteed: false
+    ReservationResource:
+      description: |
+        Reserva autorizada y financial_summary del ledger único de venta.
+        IDs/version strings, importes strings con dos decimales, instantes UTC Z.
+        Replay reautoriza acceso actual; no devuelve datos de una reserva ya invisible.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Reservation'}
+    ReservationPage:
+      description: Página autorizada; ADMIN todas, demás solo propias; sin financial_summary de detalle.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/Reservation'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+    SpaceBlockResource:
+      description: Bloqueo administrativo con motivo; no genera documento financiero.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/SpaceBlock'}
+    SpaceBlockPage:
+      description: Bloqueos paginados, exclusivamente ADMIN.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/SpaceBlock'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+    ReservationAgendaPage:
+      description: Eventos mínimos propios sin cancelados; no modifica meta ni eventos de /agenda.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/ReservationAgendaEntry'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+          example:
+            data: [{id: '4', reservation_id: '4', kind: RESERVATION, title: 'Reserva · Sala principal', start_at: '2026-11-02T16:00:00Z', end_at: '2026-11-02T17:30:00Z', status: CONFIRMED, space_id: '2'}]
+            meta: {total: 1, limit: 25, offset: 0}
+    ReservationConflict:
+      description: |
+        Códigos estables (ramificar por code, nunca message): VERSION_CONFLICT
+        (versión obsoleta), RESERVATION_CONFLICT (solapamiento bloqueante),
+        SPACE_INACTIVE (espacio desactivado), SPACE_HAS_FUTURE_OCCUPANCIES (resolver
+        ocupaciones antes de cambiar configuración), RESERVATION_STATE_CONFLICT
+        (estado incompatible), OVERPAYMENT (nuevo total inferior al neto cobrado),
+        PAYMENTS_REQUIRE_RESOLUTION (neto no cero al cancelar),
+        IDEMPOTENCY_KEY_REUSED (misma clave con otra petición).
+        No incluye banda, notas, importes ni IDs sensibles de ocupaciones ajenas.
+        Campos desconocidos, horario inválido, versión ausente/incoherente o clave
+        idempotente ausente producen 422 VALIDATION_FAILED; invisibles, 404 NOT_FOUND.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example:
+            error: {code: RESERVATION_CONFLICT, message: El espacio está ocupado en ese intervalo., fields: {}}
+            request_id: 1234567890abcdef
     ProductResource:
       description: Producto autorizado con extra_ids; precio como string y active boolean.
       content:

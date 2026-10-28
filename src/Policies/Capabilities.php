@@ -177,7 +177,6 @@ final class Capabilities
             self::RESERVATIONS_CREATE,
             self::RESERVATIONS_VIEW_OWN,
             self::RESERVATIONS_RESCHEDULE_OWN,
-            self::RESERVATIONS_CANCEL_OWN,
             self::AGENDA_VIEW_OWN,
             self::MEETINGS_CREATE,
             self::MEETINGS_RESPOND,

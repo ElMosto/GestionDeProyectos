@@ -22,6 +22,20 @@
     --shadow: 0 10px 30px rgba(16, 35, 63, 0.18);
 }
 
+/* Fase 4: fechas ISO legibles y horarios completos, sin ocultar ventanas en móvil. */
+.reservation-form input,
+.space-hours input {
+    min-height: 44px;
+    max-width: 100%;
+}
+.reservation-document-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    overflow-wrap: anywhere;
+}
+.space-hours fieldset { min-width: 0; }
+
 body {
     background: var(--surface-soft);
     display: flex;

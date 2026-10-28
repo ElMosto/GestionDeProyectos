@@ -61,7 +61,7 @@ final class FinancialConcurrencyTest extends DatabaseTestCase
     private function request(string $path, array $body, string $token): array
     {
         return ['database' => 'gestion_test', 'method' => 'POST', 'path' => $path,
-            'body' => $body, 'headers' => F::key(), 'bearer' => $token];
+            'body' => $body, 'headers' => F::key(), 'bearer' => $token, 'await_ack' => true];
     }
 
     /**
@@ -113,10 +113,15 @@ final class FinancialConcurrencyTest extends DatabaseTestCase
             $results = [];
             foreach ($children as &$child) {
                 $results[] = json_decode($this->line($child), true, flags: JSON_THROW_ON_ERROR);
+                fwrite($child['pipes'][0], "ACK\n");
+                fflush($child['pipes'][0]);
             }
             unset($child);
             return $results;
         } finally {
+            // Una excepción dentro del foreach por referencia deja el alias activo.
+            // Liberarlo evita sobrescribir el último worker durante la limpieza.
+            unset($child);
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
@@ -126,11 +131,13 @@ final class FinancialConcurrencyTest extends DatabaseTestCase
                         fclose($pipe);
                     }
                 }
-                $status = proc_get_status($child['process']);
-                if ($status['running']) {
-                    proc_terminate($child['process']);
+                if (is_resource($child['process'])) {
+                    $status = proc_get_status($child['process']);
+                    if ($status['running']) {
+                        proc_terminate($child['process']);
+                    }
+                    proc_close($child['process']);
                 }
-                proc_close($child['process']);
             }
         }
     }
@@ -171,6 +178,9 @@ final class FinancialConcurrencyTest extends DatabaseTestCase
             if (feof($child['pipes'][1])) {
                 throw new RuntimeException('Worker terminó sin respuesta: ' . $child['stderr'] . $child['buffer']);
             }
+            $read = [$child['pipes'][1], $child['pipes'][2]];
+            $write = $except = null;
+            stream_select($read, $write, $except, 0, 100_000);
         } while (hrtime(true) < $deadline);
         throw new RuntimeException('Timeout de 20 s en barrera/respuesta del worker: ' . $child['stderr']);
     }

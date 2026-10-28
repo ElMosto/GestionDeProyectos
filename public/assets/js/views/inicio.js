@@ -1,5 +1,5 @@
 /**
- * Inicio (`#/inicio`): saludo y accesos a los módulos disponibles en las fases 1–3.
+ * Inicio (`#/inicio`): saludo y accesos a los módulos disponibles en las fases 1–4.
  *
  * No inventa datos de proyectos, ventas ni agenda: solo muestra lo que ya existe y
  * anuncia lo que llegará en fases posteriores (§17, §20).
@@ -34,7 +34,7 @@ export function renderInicio(container, ctx) {
         },
         {
             title: 'Agenda',
-            description: 'Tus tareas programadas por rango de fechas. Reuniones y reservas llegarán después.',
+            description: 'Tus tareas y reservas a cargo por rango de fechas.',
             path: '/agenda',
             visible: capabilities['agenda.viewOwn'] === true,
         },
@@ -49,6 +49,18 @@ export function renderInicio(container, ctx) {
             description: 'Ventas ordinarias, partidas con extras, tickets, abonos y saldos.',
             path: '/ventas',
             visible: capabilities['sales.viewOwn'] === true,
+        },
+        {
+            title: 'Reservas',
+            description: 'Reservas de bandas, reprogramación y venta vinculada para cobros y tickets.',
+            path: '/reservas',
+            visible: capabilities['reservations.viewOwn'] === true,
+        },
+        {
+            title: 'Espacios',
+            description: 'Ocupación mínima por rango. Administración configura espacios, horarios y mantenimiento.',
+            path: '/espacios',
+            visible: capabilities['spaces.viewOccupancy'] === true,
         },
         {
             title: 'Productos y extras',
@@ -123,7 +135,7 @@ export function renderInicio(container, ctx) {
         ]),
         panel({
             title: 'Próximas fases',
-            description: 'Reservas, reuniones y finanzas globales llegan en las próximas fases.',
+            description: 'Reuniones y finanzas globales llegan en las próximas fases.',
             children: el('p', { class: 'panel-text', text: 'Cuando estén disponibles aparecerán en el menú. Este inicio no muestra datos de ejemplo ni cifras calculadas en el navegador.' }),
         }),
     ]);

@@ -179,7 +179,7 @@ final class CapabilitiesTest extends TestCase
             Capabilities::SALES_CANCEL_WITHOUT_PAYMENTS_OWN => [true, false, false],
             Capabilities::SALES_CANCEL_WITHOUT_PAYMENTS_ANY => [true, false, false],
             Capabilities::SALES_CANCEL_WITH_PAYMENTS => [true, false, false],
-            Capabilities::RESERVATIONS_CANCEL_OWN => [true, true, false],
+            Capabilities::RESERVATIONS_CANCEL_OWN => [true, false, false], // D-23: coordina cancelación de venta ADMIN.
             Capabilities::SPACES_MANAGE => [true, false, false],
             Capabilities::MEETINGS_CREATE => [true, true, true],
             Capabilities::NOTIFICATIONS_VIEW => [true, true, true],

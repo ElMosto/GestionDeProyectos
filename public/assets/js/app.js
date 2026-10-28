@@ -42,6 +42,9 @@ import { renderAgenda } from './views/agenda.js';
 import { renderProductos } from './views/productos.js';
 import { renderVentas } from './views/ventas.js';
 import { renderVenta } from './views/venta.js';
+import { renderEspacios } from './views/espacios.js';
+import { renderReservas } from './views/reservas.js';
+import { renderReserva } from './views/reserva.js';
 
 const ROUTES = {
     '/inicio': { title: 'Inicio', render: renderInicio },
@@ -53,6 +56,8 @@ const ROUTES = {
     '/agenda': { title: 'Agenda', render: renderAgenda },
     '/productos': { title: 'Productos y extras', render: renderProductos },
     '/ventas': { title: 'Ventas', render: renderVentas },
+    '/espacios': { title: 'Espacios', render: renderEspacios },
+    '/reservas': { title: 'Reservas', render: renderReservas },
 };
 
 const appRoot = document.getElementById('app');
@@ -171,6 +176,8 @@ function renderChrome() {
         { path: '/agenda', label: 'Agenda', capability: 'agenda.viewOwn' },
         { path: '/clientes', label: 'Clientes', capability: 'clients.view' },
         { path: '/ventas', label: 'Ventas', capability: 'sales.viewOwn' },
+        { path: '/reservas', label: 'Reservas', capability: 'reservations.viewOwn' },
+        { path: '/espacios', label: 'Espacios', capability: 'spaces.viewOccupancy' },
         { path: '/productos', label: 'Productos / Extras', capability: 'catalog.view' },
         { path: '/usuarios', label: 'Usuarios', capability: 'users.manage' },
         { path: '/mi-usuario', label: 'Mi usuario' },
@@ -182,7 +189,7 @@ function renderChrome() {
         el('a', {
             class: 'nav-link',
             href: `#${item.path}`,
-            'aria-current': activePath === item.path || (item.path === '/proyectos' && /^\/proyectos\/[1-9]\d*$/.test(activePath)) || (item.path === '/ventas' && /^\/ventas\/[1-9]\d*$/.test(activePath)) ? 'page' : null,
+            'aria-current': activePath === item.path || (item.path === '/proyectos' && /^\/proyectos\/[1-9]\d*$/.test(activePath)) || (item.path === '/ventas' && /^\/ventas\/[1-9]\d*$/.test(activePath)) || (item.path === '/reservas' && /^\/reservas\/[1-9]\d*$/.test(activePath)) ? 'page' : null,
         }, item.label),
     ))));
 
@@ -272,8 +279,10 @@ async function render() {
     // IDs remain strings: BIGINT identifiers must never pass through Number.
     const projectMatch = /^\/proyectos\/([1-9]\d*)$/.exec(path);
     const saleMatch = /^\/ventas\/([1-9]\d*)$/.exec(path);
+    const reservationMatch = /^\/reservas\/([1-9]\d*)$/.exec(path);
     const route = projectMatch ? { title: 'Proyecto', render: (root, context) => renderProyecto(root, context, projectMatch[1]) }
-        : saleMatch ? { title: 'Venta', render: (root, context) => renderVenta(root, context, saleMatch[1]) } : ROUTES[path];
+        : saleMatch ? { title: 'Venta', render: (root, context) => renderVenta(root, context, saleMatch[1]) }
+            : reservationMatch ? { title: 'Reserva', render: (root, context) => renderReserva(root, context, reservationMatch[1]) } : ROUTES[path];
 
     if (!route) {
         setTitle('Página no encontrada');

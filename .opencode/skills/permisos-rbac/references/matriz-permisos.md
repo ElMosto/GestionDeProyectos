@@ -82,7 +82,7 @@ rol. Toda celda con "Propio" exige comprobación de objeto además del rol.
 | Ver reserva | ✔ | Propias | Propias | |
 | Reprogramar | ✔ | Propias | Propias | Revalida con bloqueo |
 | Confirmar / iniciar / finalizar | ✔ | Propias | Propias | Según transición |
-| Cancelar reserva | ✔ | Propias | — | Coordina cancelación de venta |
+| Cancelar reserva | ✔ | — | — | D-23 / §10: cancela venta; solo ADMIN, motivo y neto cero |
 | Reserva retrospectiva | ✔ | — | — | Con motivo obligatorio |
 
 ## Reuniones y notificaciones

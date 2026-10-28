@@ -9,7 +9,7 @@ Cada fase termina con: pruebas en verde, `docs/fases.md` actualizado, commit y `
 | 1 | Inventario de hosting, esquema, autenticación, roles, perfiles, clientes | arquitecto-datos, seguridad-permisos, backend-php, frontend-web, qa-aceptacion | **Implementada y verificada localmente; hosting pendiente** |
 | 2 | Proyectos, etapas, tareas, membresías, tareas independientes | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
 | 3 | Productos, extras, ventas, cobros, tickets de venta | backend-php, documentos-salida, frontend-web, qa-aceptacion | **Completada localmente** |
-| 4 | Espacios, reservas transaccionales, agenda | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | Pendiente |
+| 4 | Espacios, reservas transaccionales, agenda | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
 | 5 | Reuniones, invitaciones, notificaciones | backend-php, frontend-web, qa-aceptacion | Pendiente |
 | 6 | Dashboard, gastos, Gantt XLSX, auditoría, pruebas, despliegue | backend-php, documentos-salida, seguridad-permisos, qa-aceptacion | Pendiente |
 | 7 | App Android (fuera del alcance inicial; contrato ya preparado) | movil-android | Futuro |
@@ -86,6 +86,24 @@ El hosting conserva su bloqueo de certificación, separado del desarrollo local 
 Impresión comprobada con el motor de Chromium, incluidos texto largo y A4 multipágina.
 Queda pendiente una impresora térmica física, sin afirmar esa certificación ni la del hosting.
 Dashboard, gastos, reservas y XLSX siguen en sus fases correspondientes.
+
+## Fase 4 — Espacios y reservas (completada localmente)
+
+- [x] Revisión del esquema existente: sin migración adicional necesaria.
+- [x] Configuración ADMIN de espacios, tarifas, granularidad y horarios locales completos.
+- [x] Ocupación mínima compartida sin bandas, notas, responsables ni importes.
+- [x] Reserva BANDA con venta RESERVA única y snapshot exacto, sin pago automático.
+- [x] Mutex por espacio, IDs ordenados al cambiar sala, intervalos semiabiertos.
+- [x] Reprogramación, estados y mantenimiento transaccionales, versionados e idempotentes.
+- [x] Cancelación ADMIN coordinada sin borrar historial; ajustes con cobros según D-15.
+- [x] Agenda de reservas propias aditiva, con rangos diario/semanal/mensual; tareas intactas.
+- [x] Ticket de venta con anexo de reserva autorizado; dependencias por constructor.
+- [x] OpenAPI 0.6.0, **301 pruebas / 5.285 aserciones** en dos órdenes aleatorios.
+- [x] **40 comprobaciones de navegador** propias; acumulado de fases 1–4: **166**.
+
+El primer espacio real y sus horarios/tarifa se configuran por ADMIN; no se inventan datos
+operativos en seeds. Hosting e impresora física conservan las limitaciones anteriores.
+Reuniones/notificaciones y dashboard se implementarán en las fases siguientes.
 
 ## Riesgos conocidos por fase
 

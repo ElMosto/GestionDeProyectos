@@ -9,6 +9,7 @@ use App\Core\Database;
 use App\Policies\Authorizer;
 use App\Repositories\CatalogRepository;
 use App\Repositories\SaleRepository;
+use App\Repositories\ReservationSaleRepository;
 use App\Repositories\SequenceRepository;
 use App\Services\CatalogService;
 use App\Services\PaymentLedger;
@@ -30,7 +31,7 @@ return static function (Container $container, string $root): void {
     $container->singleton(SaleService::class, static fn (Container $c): SaleService => new SaleService(
         $c->get(SaleRepository::class), $c->get(SequenceRepository::class), $c->get(SaleCalculatorService::class),
         $c->get(PaymentLedger::class), $c->get(Database::class), $c->get(Authorizer::class),
-        $c->get(ProjectAudit::class), $c->get(ProjectIdempotency::class),
+        $c->get(ProjectAudit::class), $c->get(ProjectIdempotency::class), $c->get(ReservationSaleRepository::class),
     ));
     $container->singleton(CatalogController::class, static fn (Container $c): CatalogController => new CatalogController(
         $c->get(CatalogService::class), $c->get(ProjectAudit::class),

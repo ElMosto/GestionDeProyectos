@@ -352,3 +352,34 @@ antigua de cancelación sin pagos al líder: D-18 aplica §10, la regla más res
 Cobertura propia: `tests/Unit/Policies/AuthorizerTest.php` y `CapabilitiesTest.php` verifican
 propio/ajeno, roles, estados históricos, RESERVA, cancelación ADMIN, proyectos cobrables y
 FINALIZADO/CANCELADO, actores inactivos, nulos e IDs malformados o BIGINT.
+
+## 16. Políticas de espacios y reservas — fase 4
+
+Contrato de `Authorizer` para el servicio coordinador (§5, §10, §12, §16; D-23):
+
+- `canViewReservation(?array $reservation): bool`: ADMIN o responsable activo según
+  `reservations.responsible_id`, también para el histórico. Filas confiables del repositorio,
+  nunca del payload. Como en ventas, ADMIN admite una fila existente sin responsable;
+  un objeto `null` siempre se deniega, incluso para ADMIN.
+- `canManageReservation(?array $reservation): bool`: ADMIN o responsable, para reprogramación
+  y transiciones. El servicio verifica estado, versión, bloqueos y reglas monetarias;
+  esta policy no concede cancelación ni cambio de responsable.
+- `canCancelReservation(?array $reservation): bool`: solo ADMIN activo con objeto no nulo.
+  D-23 sustituye la antigua fila que permitía cancelar al líder: cancelar reserva cancela
+  venta y §10 exige ADMIN incluso sin pagos. El servicio exige motivo, neto cero y
+  coordinación transaccional; no hay reembolso automático. La capacidad histórica
+  `reservations.cancelOwn` no otorga autorización por objeto.
+- `canManageSpaces(): bool`: ADMIN activo con `spaces.manage`, para configuración, tarifas,
+  horarios y bloqueos.
+- Identidad ausente, inactiva o inválida se deniega. Se reutiliza la comparación estricta
+  de IDs canónicos (int/string decimal positivo), sin truncar BIGINT ni aceptar booleanos,
+  floats o sufijos. Ser registrador de un pago no concede propiedad de reserva ni venta.
+- El calendario mínimo de espacios usa la capacidad existente `spaces.viewOccupancy` para
+  todos los usuarios activos; no concede detalle de reservas ajenas ni datos financieros.
+  El middleware mantiene la comprobación de cuenta activa en cada petición.
+- Consumidores deben reautorizar también replays idempotentes y recortar agenda, tickets,
+  exportaciones y errores. No se modifican capacidades ni las políticas de pagos.
+
+Cobertura sin BD: `tests/Unit/Policies/ReservationAuthorizerTest.php` prueba los tres roles,
+propio/ajeno, histórico, nulos, cuentas inactivas, strings PDO, IDs malformados/BIGINT,
+cancelación exclusiva ADMIN (D-23) y separación entre ocupación y detalle privado.

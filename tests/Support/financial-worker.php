@@ -28,6 +28,11 @@ try {
     );
     fwrite(STDOUT, json_encode(['status' => $result->status, 'payload' => $result->payload], JSON_THROW_ON_ERROR) . "\n");
     fflush(STDOUT);
+    // Mantener los sockets Windows hasta que el padre haya consumido el resultado.
+    // Solo lo solicitan clientes que implementan la confirmación explícita.
+    if (($request['await_ack'] ?? false) === true && trim((string) fgets(STDIN)) !== 'ACK') {
+        throw new RuntimeException('Falta confirmación de recepción del resultado.');
+    }
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception::class . ': ' . $exception->getMessage() . "\n" . $exception->getTraceAsString());
     exit(1);
