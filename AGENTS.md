@@ -66,6 +66,9 @@ Las reglas detalladas viven en las skills de `.opencode/skills/`; cárgalas ante
 ## Flujo de trabajo
 
 - Fases 1-6 en `docs/fases.md`. No adelantar trabajo de una fase posterior sin aprobación.
+- El usuario ha aprobado avanzar automáticamente por las fases 1-6: al terminar y verificar
+  una etapa, continuar con la siguiente sin esperar otra orden ni pedir permiso para pruebas.
+  Documentar los bloqueos reales (como el inventario de hosting), sin darlos por resueltos.
 - **Al terminar cada fase:** actualizar `docs/fases.md`, ejecutar las pruebas, commit y
   `git push` a `https://github.com/ElMosto/GestionDeProyectos` (rama `main`).
 - Los puntos abiertos de la especificación (§21) se registran en `docs/decisiones.md`. Si algo

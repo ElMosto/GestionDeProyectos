@@ -177,13 +177,19 @@ final class SchemaIntegrityTest extends DatabaseTestCase
         $versions = $this->pdo->query('SELECT version FROM schema_migrations ORDER BY version')
             ->fetchAll(\PDO::FETCH_COLUMN);
 
-        $this->assertSame(['001', '002', '003', '004', '005', '006'], $versions);
+        $this->assertSame(['001', '002', '003', '004', '005', '006', '007'], $versions);
 
         $roles = $this->pdo->query('SELECT code FROM roles ORDER BY id')->fetchAll(\PDO::FETCH_COLUMN);
         $this->assertSame(['ADMINISTRADOR', 'LIDER_PROYECTO', 'COLABORADOR'], $roles);
 
         $this->assertSame(3, (int) $this->pdo->query('SELECT COUNT(*) FROM settings')->fetchColumn());
-        $this->assertSame(5, (int) $this->pdo->query('SELECT COUNT(*) FROM sequences')->fetchColumn());
+        $names = $this->pdo->query('SELECT name FROM sequences')->fetchAll(\PDO::FETCH_COLUMN);
+        foreach (['project', 'sale', 'payment', 'refund', 'expense'] as $seeded) {
+            $this->assertContains($seeded, $names);
+        }
+        // La suite conserva secuencias para no reutilizar folios. Puede haber
+        // contadores anuales creados por las pruebas previas, sin perder los seeds.
+        $this->assertGreaterThanOrEqual(5, count($names));
     }
 
     public function test_H_audit_logs_table_is_append_only_by_design(): void

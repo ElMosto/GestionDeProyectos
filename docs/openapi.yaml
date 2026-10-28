@@ -1,12 +1,13 @@
 openapi: 3.1.0
 info:
   title: Gestión de Proyectos — Estudio Musical
-  version: 0.3.0
+  version: 0.4.0
   description: |
     API del sistema de gestión del estudio musical.
 
-    Estado: fase 1. Autenticación, perfil, administración de usuarios y clientes.
-    Proyectos, ventas, pagos, reservas y agenda se añaden en las fases 2-6.
+    Estado: fases 1-2. Autenticación, perfil, usuarios, clientes, proyectos,
+    etapas, membresías, tareas, cargos y agenda propia de tareas.
+    Ventas, escritura de pagos, reservas y reuniones se añaden en fases posteriores.
 
     Convenciones vinculantes (ver `docs/api-movil.md`):
     - Importes y cantidades como **string** decimal.
@@ -15,6 +16,12 @@ info:
     - Éxito: `{data, meta}`. Error: `{error:{code,message,fields},request_id}`.
     - Escrituras con `Idempotency-Key` cuando crean dinero o bloquean espacio.
     - En fase 1 las ediciones de usuarios/clientes exigen `version` en el cuerpo.
+    - En fase 2 se exige version o expected_version en el cuerpo o If-Match;
+      si se envían varios, deben coincidir. Versiones e IDs viajan como strings.
+    - Las fechas sin hora son DATE YYYY-MM-DD (o null), sin conversión de zona.
+      Los timestamps son ISO 8601 con zona UTC.
+    - Los cambios de etapas, tareas y cargos incrementan también la versión del
+      proyecto; los comentarios no. Recargar el proyecto antes de otra edición.
     - Con cookie, toda escritura exige X-CSRF-Token; con Bearer válido no.
     - `must_change_password` limita el acceso a identidad, CSRF, logout,
       avatar de lectura y cambio de contraseña hasta sustituir la clave temporal.
@@ -36,6 +43,12 @@ tags:
     description: Administración de cuentas y directorio mínimo (§5)
   - name: clientes
     description: Clientes NORMAL/BANDA y recorte de campos sensibles (§7)
+  - name: proyectos
+    description: Proyectos, membresías, etapas y cargos; finanzas solo ADMIN o líder dueño (§8)
+  - name: tareas
+    description: Tareas de proyecto, independientes y comentarios (§8)
+  - name: agenda
+    description: Proyección propia paginada de tareas; sin reuniones ni reservas en fase 2 (§13)
 
 paths:
   /auth/csrf:
@@ -779,6 +792,580 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /projects:
+    get:
+      tags: [proyectos]
+      operationId: listProjects
+      summary: Listar proyectos visibles
+      description: |
+        ADMIN ve todos; LIDER_PROYECTO solo los que lidera; COLABORADOR solo
+        aquellos de los que es miembro. Orden por ID descendente, sin sort libre.
+        Notes, base_amount y financial_summary se omiten salvo ADMIN/líder dueño,
+        tanto con cookie como con Bearer. Filtros SQL limitados a esta lista blanca.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/ProjectSearch'
+        - name: type
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectType'}
+        - name: status
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectStatus'}
+        - name: leader_id
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectId'}
+        - name: client_id
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectId'}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [proyectos]
+      operationId: createProject
+      summary: Crear proyecto en BORRADOR
+      description: |
+        ADMIN selecciona líder activo LIDER_PROYECTO; un líder solo crea bajo su
+        liderazgo. EXTERNO exige cliente activo, importe positivo y billable=true.
+        INTERNO permite cero y no cobrable por defecto. Moneda MXN.
+        Idempotency-Key obligatorio cuando se crea con valor comercial/importe;
+        se admite también para altas sin valor. Misma clave, actor, operación y
+        contenido devuelve el resultado original sin duplicar; contenido distinto
+        produce 409 IDEMPOTENCY_KEY_REUSED. Efecto y resultado son transaccionales.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIdempotencyConditional'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectCreate'}
+            example: {name: Grabación EP, description: Producción musical, type: EXTERNO, leader_id: '2', client_id: '1', billable: true, base_amount: '1500.00'}
+      responses:
+        '201': {$ref: '#/components/responses/ProjectResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /projects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [proyectos]
+      operationId: getProject
+      summary: Consultar proyecto visible
+      description: Mismo recorte financiero que la lista. Un ID ajeno no concede acceso; 404 sin importes.
+      responses:
+        '200': {$ref: '#/components/responses/ProjectResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [proyectos]
+      operationId: updateProject
+      summary: Editar proyecto sin modificar su estado
+      description: |
+        Solo ADMIN/líder dueño. Requiere versión del proyecto mediante version,
+        expected_version o If-Match; si hay varios, deben coincidir (422 si no).
+        Proyecto terminal exige reapertura (409 PROJECT_CLOSED).
+        Cambios financieros (base_amount, billable, client_id o type) requieren
+        Idempotency-Key; la edición no financiera no lo exige. Con cobros, ajustes
+        comerciales solo ADMIN y total nunca inferior al neto cobrado
+        (409 TOTAL_BELOW_PAID). No modifica pagos ni gastos. Fechas contienen a
+        todas las etapas/tareas. Cliente activo para nuevas operaciones comerciales.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+        - $ref: '#/components/parameters/ProjectIdempotencyConditional'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectUpdate'}
+            example: {version: '1', name: Grabación EP revisada}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /projects/{id}/transitions:
+    post:
+      tags: [proyectos]
+      operationId: transitionProject
+      summary: Cambiar estado o reabrir proyecto
+      description: |
+        Solo ADMIN/líder dueño. Versión del proyecto obligatoria en cuerpo o If-Match;
+        múltiples fuentes deben coincidir. BORRADOR→PLANIFICADO→EN_CURSO↔PAUSADO;
+        EN_CURSO/PAUSADO→FINALIZADO. Cualquier no terminal→CANCELADO exige reason.
+        Finalizar exige todas las tareas obligatorias COMPLETADA, incluidas las
+        canceladas; excepción solo ADMIN con exception=true y reason no vacío.
+        Reabrir FINALIZADO/CANCELADO→EN_CURSO solo ADMIN y con reason.
+        Finalizar no liquida pagos ni crea cobros.
+      parameters:
+        - $ref: '#/components/parameters/ProjectResourceId'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectTransition'}
+            example: {expected_version: '2', status: PLANIFICADO}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /projects/{id}/members:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [proyectos]
+      operationId: listProjectMembers
+      summary: Consultar integrantes del proyecto visible
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/ProjectMemberPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    put:
+      tags: [proyectos]
+      operationId: replaceProjectMembers
+      summary: Reemplazar lista completa de integrantes
+      description: |
+        Solo ADMIN/líder dueño; usuarios activos, sin duplicados, máximo 1000 IDs.
+        Versión del proyecto obligatoria en cuerpo o If-Match; fuentes coincidentes.
+        No retirar un asignado a tarea no cancelada (409 MEMBER_HAS_TASKS).
+        Respuesta paginada con los primeros 100 integrantes y meta.project_version;
+        usar GET para páginas posteriores. Lista vacía retira todos si es válido.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectMembersReplace'}
+            example: {version: '3', user_ids: ['3', '4']}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectMemberPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /projects/{id}/stages:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [proyectos]
+      operationId: listProjectStages
+      summary: Listar etapas ordenadas del proyecto visible
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/ProjectStagePage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [proyectos]
+      operationId: createProjectStage
+      summary: Añadir etapa al proyecto
+      description: Solo ADMIN/líder dueño; fechas contenidas en proyecto. Incrementa versión del proyecto.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectStageCreate'}
+            example: {name: Preproducción, start_date: '2026-10-01', end_date: '2026-10-15'}
+      responses:
+        '201': {$ref: '#/components/responses/ProjectStageResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /stages/{id}:
+    patch:
+      tags: [proyectos]
+      operationId: updateProjectStage
+      summary: Editar etapa y validar fechas de descendientes
+      description: |
+        Solo ADMIN/líder dueño. Versión de la etapa en cuerpo o If-Match;
+        fuentes coincidentes. Fechas dentro del proyecto y que contienen tareas.
+        COMPLETADA exige tareas obligatorias completadas. Incrementa versión del proyecto.
+      parameters:
+        - $ref: '#/components/parameters/ProjectResourceId'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectStageUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectStageResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /projects/{id}/stages/reorder:
+    post:
+      tags: [proyectos]
+      operationId: reorderProjectStages
+      summary: Reordenar conjunto completo de etapas
+      description: |
+        Solo ADMIN/líder dueño. Versión del proyecto en cuerpo o If-Match;
+        fuentes coincidentes. stage_ids debe contener exactamente todas las etapas,
+        sin duplicados, en el orden deseado. Respuesta con primeras 100 etapas,
+        meta de paginación y project_version; consultar GET para el resto.
+      parameters:
+        - $ref: '#/components/parameters/ProjectResourceId'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectStagesReorder'}
+            example: {version: '4', stage_ids: ['2', '1']}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectStagePage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /stages/{id}/tasks:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [tareas]
+      operationId: listStageTasks
+      summary: Listar tareas de etapa visible
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/ProjectSearch'
+        - $ref: '#/components/parameters/TaskStatusFilter'
+        - $ref: '#/components/parameters/TaskAssigneeFilter'
+      responses:
+        '200': {$ref: '#/components/responses/TaskPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [tareas]
+      operationId: createStageTask
+      summary: Crear tarea asignada a colaborador miembro activo
+      description: |
+        Solo ADMIN/líder dueño. No admite project_id ni stage_id en cuerpo;
+        proyecto derivado de la etapa. Fechas dentro de etapa y proyecto.
+        Una etapa COMPLETADA/CANCELADA exige reapertura (409 STAGE_CLOSED).
+        Incrementa versión del proyecto.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TaskCreate'}
+            example: {title: Preparar sesión, assignee_id: '3', is_required: true}
+      responses:
+        '201': {$ref: '#/components/responses/TaskResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /tasks:
+    get:
+      tags: [tareas]
+      operationId: listTasks
+      summary: Listar tareas visibles, propias por defecto
+      description: |
+        Sin assignee_id, stage_id ni project_id se aplica el usuario actual como
+        responsable. Los filtros nunca amplían permisos por objeto. Independientes
+        visibles solo para ADMIN o responsable. Orden por fin (null al final) e ID.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/ProjectSearch'
+        - $ref: '#/components/parameters/TaskStatusFilter'
+        - $ref: '#/components/parameters/TaskAssigneeFilter'
+        - name: project_id
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectId'}
+        - name: stage_id
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectId'}
+        - name: standalone
+          in: query
+          description: 1 solo independientes; 0 solo tareas de proyecto.
+          schema: {type: string, enum: ['0', '1']}
+      responses:
+        '200': {$ref: '#/components/responses/TaskPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /tasks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [tareas]
+      operationId: getTask
+      summary: Consultar tarea visible
+      responses:
+        '200': {$ref: '#/components/responses/TaskResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [tareas]
+      operationId: updateTask
+      summary: Editar tarea o actualizar progreso propio
+      description: |
+        Responsable solo puede editar progress; alcance, fechas y asignación solo
+        ADMIN/líder dueño (independientes solo ADMIN). Versión de tarea en cuerpo
+        o If-Match; fuentes coincidentes. No cambia estado ni pertenencia.
+        Tarea terminal exige reapertura (409 TASK_CLOSED). Incrementa versión del
+        proyecto cuando procede. Fechas y asignación revalidadas por servidor.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TaskUpdate'}
+            example: {version: '1', progress: 50}
+      responses:
+        '200': {$ref: '#/components/responses/TaskResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /tasks/{id}/transitions:
+    post:
+      tags: [tareas]
+      operationId: transitionTask
+      summary: Cambiar estado de tarea o reabrirla con motivo
+      description: |
+        ADMIN/líder dueño o responsable autorizado. Versión de tarea en cuerpo o
+        If-Match; fuentes coincidentes. Completar fija progress=100 y fechas reales.
+        Reabrir COMPLETADA/CANCELADA exige EN_CURSO y reason; restablece progreso
+        a cero conservando historial. Repetir estado actual da INVALID_TRANSITION.
+        Incrementa versión del proyecto; un proyecto cerrado impide la operación.
+      parameters:
+        - $ref: '#/components/parameters/ProjectResourceId'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TaskTransition'}
+            example: {version: '2', status: COMPLETADA}
+      responses:
+        '200': {$ref: '#/components/responses/TaskResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /standalone-tasks:
+    post:
+      tags: [tareas]
+      operationId: createStandaloneTask
+      summary: Crear tarea independiente, solo ADMIN
+      description: Responsable activo de cualquier rol; no admite stage_id/project_id. Aparece en su agenda si tiene fechas.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TaskCreate'}
+            example: {title: Revisar equipo, assignee_id: '2', start_date: '2026-10-28', end_date: '2026-10-28'}
+      responses:
+        '201': {$ref: '#/components/responses/TaskResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /tasks/{id}/comments:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [tareas]
+      operationId: listTaskComments
+      summary: Listar comentarios inmutables de tarea visible
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/TaskCommentPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [tareas]
+      operationId: createTaskComment
+      summary: Añadir comentario a tarea visible
+      description: Autor y fecha del servidor. Inmutable; no incrementa versión ni exige versión esperada.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TaskCommentCreate'}
+            example: {body: Sesión preparada.}
+      responses:
+        '201': {$ref: '#/components/responses/TaskCommentResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /projects/{id}/charges:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [proyectos]
+      operationId: listProjectCharges
+      summary: Consultar cargos internos del proyecto
+      description: Solo ADMIN/líder dueño; un colaborador recibe 403 sin importes ni resumen.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/ProjectChargePage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [proyectos]
+      operationId: createProjectCharge
+      summary: Añadir cargo a proyecto INTERNO
+      description: |
+        Solo ADMIN/líder dueño. Idempotency-Key obligatorio; repetición idéntica
+        devuelve resultado original, contenido distinto da IDEMPOTENCY_KEY_REUSED.
+        Cantidad string de tres decimales, precio string de dos; amount calculado
+        con redondeo por partida. No registra pago ni gasto. Incrementa versión
+        del proyecto. Ajustes con cobros solo ADMIN.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectChargeCreate'}
+            example: {concept: Edición adicional, quantity: '1.000', unit_price: '500.00', charge_date: '2026-10-28'}
+      responses:
+        '201': {$ref: '#/components/responses/ProjectChargeResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /project-charges/{id}:
+    patch:
+      tags: [proyectos]
+      operationId: updateProjectCharge
+      summary: Corregir o anular cargo sin eliminar historial
+      description: |
+        Solo ADMIN/líder dueño, proyectos INTERNO. Idempotency-Key obligatorio.
+        Versión del cargo en cuerpo o If-Match; fuentes coincidentes.
+        Recalcula amount e incrementa versión del proyecto. Con cobros solo ADMIN;
+        total nunca inferior al neto cobrado (TOTAL_BELOW_PAID).
+        Anular no reembolsa ni elimina pagos/gastos.
+      parameters:
+        - $ref: '#/components/parameters/ProjectResourceId'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+        - $ref: '#/components/parameters/ProjectIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectChargeUpdate'}
+            example: {version: '1', status: ANULADO}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectChargeResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ProjectConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /projects/{id}/payments:
+    get:
+      tags: [proyectos]
+      operationId: listProjectPayments
+      summary: Historial de pagos, solo lectura en fase 2
+      description: |
+        Solo ADMIN/líder dueño. meta.summary contiene resumen financiero calculado.
+        No existe POST de pagos de proyecto en fase 2. Sin importes en 403/404;
+        no se confunde valor interno estimado con ingreso ni cuenta por cobrar.
+      parameters:
+        - $ref: '#/components/parameters/ProjectResourceId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/ProjectPaymentPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /agenda:
+    get:
+      tags: [agenda]
+      operationId: getOwnTaskAgenda
+      summary: Proyección de tareas propias en rango DATE
+      description: |
+        Solo tareas asignadas al solicitante, incluso con Bearer. Fase 2 no incluye
+        reuniones ni reservas. Rango inclusivo from/to, fin no anterior al inicio,
+        diferencia máxima 366 días. Sin fechas y CANCELADA no aparecen.
+        Eventos de día completo con kind=TASK; no expone finanzas de proyectos.
+        No permite consultar agendas ajenas cambiando assignee_id.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: from
+          in: query
+          required: true
+          schema: {type: string, format: date}
+        - name: to
+          in: query
+          required: true
+          schema: {type: string, format: date}
+      responses:
+        '200': {$ref: '#/components/responses/TaskAgendaPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/ProjectForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
 components:
   securitySchemes:
     cookieAuth:
@@ -792,6 +1379,385 @@ components:
       description: Token opaco de dispositivo (Android). Sin JWT.
 
   schemas:
+    ProjectId:
+      type: string
+      pattern: '^[1-9][0-9]{0,18}$'
+      description: Identificador positivo, máximo 9223372036854775807; siempre string en JSON.
+      examples: ['1']
+    ProjectVersion:
+      type: string
+      pattern: '^[1-9][0-9]{0,9}$'
+      description: Versión positiva, máximo 4294967295; siempre string en JSON.
+      examples: ['1']
+    ProjectMoney:
+      type: string
+      pattern: '^(0|[1-9][0-9]{0,9})\.[0-9]{2}$'
+      description: Importe decimal exacto no negativo, nunca número JSON.
+      examples: ['1500.00']
+    ProjectQuantity:
+      type: string
+      pattern: '^(0|[1-9][0-9]{0,6})\.[0-9]{3}$'
+      description: Cantidad decimal exacta estrictamente positiva (0.000 no válido).
+      examples: ['1.000']
+    ProjectDate:
+      type: [string, 'null']
+      format: date
+      description: Fecha de calendario real YYYY-MM-DD sin hora/zona; null elimina la fecha.
+    ProjectType:
+      type: string
+      enum: [INTERNO, EXTERNO]
+    ProjectStatus:
+      type: string
+      enum: [BORRADOR, PLANIFICADO, EN_CURSO, PAUSADO, FINALIZADO, CANCELADO]
+    ProjectPriority:
+      type: string
+      enum: [BAJA, MEDIA, ALTA, URGENTE]
+    ProjectStageStatus:
+      type: string
+      enum: [PENDIENTE, EN_CURSO, COMPLETADA, CANCELADA]
+    TaskStatus:
+      type: string
+      enum: [PENDIENTE, EN_CURSO, BLOQUEADA, COMPLETADA, CANCELADA]
+    ProjectChargeStatus:
+      type: string
+      enum: [ACTIVO, ANULADO]
+    ProjectVersionFields:
+      type: object
+      description: |
+        Obligatorio al menos uno entre version, expected_version e If-Match.
+        Todos los valores presentes deben coincidir; ausencia o desacuerdo da
+        422 VALIDATION_FAILED; versión obsoleta da 409 VERSION_CONFLICT.
+        El header se documenta por operación; puede enviarse sin campos de versión.
+      properties:
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        expected_version: {$ref: '#/components/schemas/ProjectVersion'}
+    ProjectFields:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        description: {type: string, minLength: 1, maxLength: 10000}
+        type: {$ref: '#/components/schemas/ProjectType'}
+        leader_id: {$ref: '#/components/schemas/ProjectId'}
+        client_id:
+          oneOf:
+            - $ref: '#/components/schemas/ProjectId'
+            - {type: 'null'}
+        billable: {type: boolean}
+        base_amount: {$ref: '#/components/schemas/ProjectMoney'}
+        priority: {$ref: '#/components/schemas/ProjectPriority'}
+        planned_start: {$ref: '#/components/schemas/ProjectDate'}
+        planned_end: {$ref: '#/components/schemas/ProjectDate'}
+        actual_start: {$ref: '#/components/schemas/ProjectDate'}
+        actual_end: {$ref: '#/components/schemas/ProjectDate'}
+        notes: {type: [string, 'null'], minLength: 1, maxLength: 10000}
+    ProjectCreate:
+      allOf:
+        - $ref: '#/components/schemas/ProjectFields'
+      unevaluatedProperties: false
+      required: [name, description, type]
+      description: |
+        Estado BORRADOR y moneda MXN del servidor. Líder por defecto el solicitante;
+        ADMIN debe seleccionar líder LIDER_PROYECTO activo. base_amount por defecto
+        0.00, priority MEDIA, fechas/client_id/notes null; billable por defecto
+        true en EXTERNO, false en INTERNO. Texto no vacío tras trim.
+    ProjectUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ProjectFields'
+        - $ref: '#/components/schemas/ProjectVersionFields'
+      unevaluatedProperties: false
+      description: Campos parciales; status, currency, folio y campos calculados no editables aquí.
+    ProjectProgress:
+      type: object
+      required: [task_count, completed_tasks, has_tasks, progress]
+      properties:
+        task_count: {type: integer, minimum: 0, description: Tareas no canceladas.}
+        completed_tasks: {type: integer, minimum: 0}
+        has_tasks: {type: boolean}
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Parte entera de completadas/no canceladas por 100; cero sin tareas.
+    ProjectFinancialSummary:
+      type: object
+      description: |
+        Solo ADMIN/líder dueño. Total=base+cargos activos; neto=cobros registrados
+        menos reembolsos registrados. No incluye gastos. INTERNO no cobrable es
+        valor estimado, no ingreso ni cuenta por cobrar; su balance es 0.00.
+      required: [base_amount, charges_total, total, paid_amount, refunded_amount, net_paid, balance, payment_status, billable, value_kind]
+      properties:
+        base_amount: {$ref: '#/components/schemas/ProjectMoney'}
+        charges_total: {$ref: '#/components/schemas/ProjectMoney'}
+        total: {$ref: '#/components/schemas/ProjectMoney'}
+        paid_amount: {$ref: '#/components/schemas/ProjectMoney'}
+        refunded_amount: {$ref: '#/components/schemas/ProjectMoney'}
+        net_paid: {$ref: '#/components/schemas/ProjectMoney'}
+        balance: {$ref: '#/components/schemas/ProjectMoney'}
+        payment_status: {type: string, enum: [SIN_CARGO, NO_PAGADO, PARCIAL, PAGADO]}
+        billable: {type: boolean}
+        value_kind: {type: string, enum: [COMERCIAL, VALOR_INTERNO_ESTIMADO]}
+    Project:
+      allOf:
+        - $ref: '#/components/schemas/ProjectProgress'
+        - type: object
+          required: [id, folio, type, client_id, leader_id, name, description, status, priority, planned_start, planned_end, actual_start, actual_end, currency, version, billable, created_at, updated_at]
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            folio: {type: string}
+            type: {$ref: '#/components/schemas/ProjectType'}
+            client_id:
+              oneOf:
+                - $ref: '#/components/schemas/ProjectId'
+                - {type: 'null'}
+            leader_id: {$ref: '#/components/schemas/ProjectId'}
+            name: {type: string}
+            description: {type: string}
+            status: {$ref: '#/components/schemas/ProjectStatus'}
+            priority: {$ref: '#/components/schemas/ProjectPriority'}
+            planned_start: {$ref: '#/components/schemas/ProjectDate'}
+            planned_end: {$ref: '#/components/schemas/ProjectDate'}
+            actual_start: {$ref: '#/components/schemas/ProjectDate'}
+            actual_end: {$ref: '#/components/schemas/ProjectDate'}
+            currency: {type: string, const: MXN}
+            version: {$ref: '#/components/schemas/ProjectVersion'}
+            billable: {type: boolean}
+            created_at: {type: string, format: date-time}
+            updated_at: {type: string, format: date-time}
+            notes: {type: [string, 'null'], description: Omitido salvo ADMIN/líder dueño.}
+            base_amount:
+              $ref: '#/components/schemas/ProjectMoney'
+              description: Omitido salvo ADMIN/líder dueño.
+            financial_summary:
+              $ref: '#/components/schemas/ProjectFinancialSummary'
+              description: Omitido salvo ADMIN/líder dueño; nunca se envía vacío a colaboradores.
+      description: Recorte sensible idéntico con sesión y con token opaco; no depende del cliente.
+    ProjectTransition:
+      allOf:
+        - $ref: '#/components/schemas/ProjectVersionFields'
+        - type: object
+          required: [status]
+          properties:
+            status: {$ref: '#/components/schemas/ProjectStatus'}
+            reason: {type: [string, 'null'], minLength: 1, maxLength: 2000}
+            exception: {type: boolean}
+      unevaluatedProperties: false
+    ProjectMember:
+      type: object
+      required: [user_id, name, role, active, created_at]
+      properties:
+        user_id: {$ref: '#/components/schemas/ProjectId'}
+        name: {type: string}
+        role: {type: string, enum: [ADMINISTRADOR, LIDER_PROYECTO, COLABORADOR]}
+        active: {type: boolean}
+        created_at: {type: string, format: date-time}
+    ProjectMembersReplace:
+      allOf:
+        - $ref: '#/components/schemas/ProjectVersionFields'
+        - type: object
+          required: [user_ids]
+          properties:
+            user_ids:
+              type: array
+              maxItems: 1000
+              uniqueItems: true
+              items: {$ref: '#/components/schemas/ProjectId'}
+      unevaluatedProperties: false
+    ProjectStageFields:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        description: {type: [string, 'null'], minLength: 1, maxLength: 10000}
+        start_date: {$ref: '#/components/schemas/ProjectDate'}
+        end_date: {$ref: '#/components/schemas/ProjectDate'}
+    ProjectStageCreate:
+      allOf:
+        - $ref: '#/components/schemas/ProjectStageFields'
+      unevaluatedProperties: false
+      required: [name]
+    ProjectStageUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ProjectStageFields'
+        - $ref: '#/components/schemas/ProjectVersionFields'
+        - type: object
+          properties:
+            status: {$ref: '#/components/schemas/ProjectStageStatus'}
+      unevaluatedProperties: false
+    ProjectStage:
+      allOf:
+        - $ref: '#/components/schemas/ProjectProgress'
+        - type: object
+          required: [id, project_id, name, description, start_date, end_date, status, version, sort_order]
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            project_id: {$ref: '#/components/schemas/ProjectId'}
+            name: {type: string}
+            description: {type: [string, 'null']}
+            start_date: {$ref: '#/components/schemas/ProjectDate'}
+            end_date: {$ref: '#/components/schemas/ProjectDate'}
+            status: {$ref: '#/components/schemas/ProjectStageStatus'}
+            version: {$ref: '#/components/schemas/ProjectVersion'}
+            sort_order: {type: integer}
+    ProjectStagesReorder:
+      allOf:
+        - $ref: '#/components/schemas/ProjectVersionFields'
+        - type: object
+          required: [stage_ids]
+          properties:
+            stage_ids:
+              type: array
+              maxItems: 1000
+              uniqueItems: true
+              items: {$ref: '#/components/schemas/ProjectId'}
+      unevaluatedProperties: false
+    TaskFields:
+      type: object
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        description: {type: [string, 'null'], minLength: 1, maxLength: 10000}
+        assignee_id: {$ref: '#/components/schemas/ProjectId'}
+        priority: {$ref: '#/components/schemas/ProjectPriority'}
+        start_date: {$ref: '#/components/schemas/ProjectDate'}
+        end_date: {$ref: '#/components/schemas/ProjectDate'}
+        is_required: {type: boolean}
+    TaskCreate:
+      allOf:
+        - $ref: '#/components/schemas/TaskFields'
+      unevaluatedProperties: false
+      required: [title, assignee_id]
+      description: Sin stage_id/project_id en cuerpo. Estado y progreso iniciales del servidor.
+    TaskUpdate:
+      allOf:
+        - $ref: '#/components/schemas/TaskFields'
+        - $ref: '#/components/schemas/ProjectVersionFields'
+        - type: object
+          properties:
+            actual_start: {$ref: '#/components/schemas/ProjectDate'}
+            actual_end: {$ref: '#/components/schemas/ProjectDate'}
+            progress: {type: integer, minimum: 0, maximum: 100}
+      unevaluatedProperties: false
+    Task:
+      type: object
+      required: [id, stage_id, project_id, title, description, assignee_id, assignee_name, priority, status, start_date, end_date, actual_start, actual_end, created_by, version, progress, is_required, created_at, updated_at]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        stage_id:
+          oneOf:
+            - $ref: '#/components/schemas/ProjectId'
+            - {type: 'null'}
+        project_id:
+          oneOf:
+            - $ref: '#/components/schemas/ProjectId'
+            - {type: 'null'}
+        title: {type: string}
+        description: {type: [string, 'null']}
+        assignee_id: {$ref: '#/components/schemas/ProjectId'}
+        assignee_name: {type: string}
+        priority: {$ref: '#/components/schemas/ProjectPriority'}
+        status: {$ref: '#/components/schemas/TaskStatus'}
+        start_date: {$ref: '#/components/schemas/ProjectDate'}
+        end_date: {$ref: '#/components/schemas/ProjectDate'}
+        actual_start: {$ref: '#/components/schemas/ProjectDate'}
+        actual_end: {$ref: '#/components/schemas/ProjectDate'}
+        created_by: {$ref: '#/components/schemas/ProjectId'}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        is_required: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    TaskTransition:
+      allOf:
+        - $ref: '#/components/schemas/ProjectVersionFields'
+        - type: object
+          required: [status]
+          properties:
+            status: {$ref: '#/components/schemas/TaskStatus'}
+            reason: {type: [string, 'null'], minLength: 1, maxLength: 2000}
+      unevaluatedProperties: false
+    TaskCommentCreate:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body: {type: string, minLength: 1, maxLength: 10000}
+    TaskComment:
+      type: object
+      required: [id, task_id, author_id, author_name, body, created_at]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        task_id: {$ref: '#/components/schemas/ProjectId'}
+        author_id: {$ref: '#/components/schemas/ProjectId'}
+        author_name: {type: string}
+        body: {type: string}
+        created_at: {type: string, format: date-time}
+    ProjectChargeFields:
+      type: object
+      properties:
+        concept: {type: string, minLength: 1, maxLength: 200}
+        quantity: {$ref: '#/components/schemas/ProjectQuantity'}
+        unit_price: {$ref: '#/components/schemas/ProjectMoney'}
+        charge_date: {type: string, format: date}
+    ProjectChargeCreate:
+      allOf:
+        - $ref: '#/components/schemas/ProjectChargeFields'
+      unevaluatedProperties: false
+      required: [concept, quantity, unit_price, charge_date]
+    ProjectChargeUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ProjectChargeFields'
+        - $ref: '#/components/schemas/ProjectVersionFields'
+        - type: object
+          properties:
+            status: {$ref: '#/components/schemas/ProjectChargeStatus'}
+      unevaluatedProperties: false
+    ProjectCharge:
+      type: object
+      required: [id, project_id, concept, quantity, unit_price, amount, charge_date, status, author_id, created_by, version, created_at, updated_at]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        project_id: {$ref: '#/components/schemas/ProjectId'}
+        concept: {type: string}
+        quantity: {$ref: '#/components/schemas/ProjectQuantity'}
+        unit_price: {$ref: '#/components/schemas/ProjectMoney'}
+        amount: {$ref: '#/components/schemas/ProjectMoney'}
+        charge_date: {type: string, format: date}
+        status: {$ref: '#/components/schemas/ProjectChargeStatus'}
+        author_id: {$ref: '#/components/schemas/ProjectId'}
+        created_by: {$ref: '#/components/schemas/ProjectId'}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ProjectPayment:
+      type: object
+      required: [id, folio, amount, effective_at, method, reference, notes, status, registered_by, voided_at, void_reason, version, refunded_amount]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        folio: {type: string}
+        amount: {$ref: '#/components/schemas/ProjectMoney'}
+        effective_at: {type: string, format: date-time}
+        method: {type: string}
+        reference: {type: [string, 'null']}
+        notes: {type: [string, 'null']}
+        status: {type: string, enum: [REGISTRADO, ANULADO]}
+        registered_by: {$ref: '#/components/schemas/ProjectId'}
+        voided_at: {type: [string, 'null'], format: date-time}
+        void_reason: {type: [string, 'null']}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        refunded_amount: {$ref: '#/components/schemas/ProjectMoney'}
+    TaskAgendaEntry:
+      allOf:
+        - $ref: '#/components/schemas/Task'
+        - type: object
+          required: [all_day, kind]
+          properties:
+            all_day: {type: boolean, const: true}
+            kind: {type: string, const: TASK}
+    ProjectPaginationMeta:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          required: [project_version]
+          properties:
+            project_version: {$ref: '#/components/schemas/ProjectVersion'}
     SessionEnvelope:
       type: object
       required: [data]
@@ -1135,6 +2101,59 @@ components:
                 $ref: '#/components/schemas/DuplicateWarning'
 
   parameters:
+    ProjectResourceId:
+      name: id
+      in: path
+      required: true
+      description: Identificador del recurso de la ruta; no otorga acceso al objeto.
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    ProjectSearch:
+      name: q
+      in: query
+      description: Nombre/folio para proyectos; título para tareas.
+      schema: {type: string, maxLength: 120}
+    TaskStatusFilter:
+      name: status
+      in: query
+      schema: {$ref: '#/components/schemas/TaskStatus'}
+    TaskAssigneeFilter:
+      name: assignee_id
+      in: query
+      description: Responsable; no amplía visibilidad por objeto.
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    ProjectIfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        Versión entre comillas, alternativa a version/expected_version del cuerpo.
+        Al menos una fuente obligatoria; varias deben coincidir. Ausencia, formato
+        incorrecto o desacuerdo da 422; obsoleta da 409 VERSION_CONFLICT.
+      schema: {type: string, pattern: '^"[1-9][0-9]*"$'}
+      example: '"3"'
+    ProjectIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Obligatorio en escrituras de cargos. ASCII imprimible sin espacios, 1–100.
+        Alcance actor+operación; mismo contenido devuelve resultado original;
+        distinto contenido da 409 IDEMPOTENCY_KEY_REUSED. Efecto y respuesta
+        se guardan en la misma transacción.
+      schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[!-~]+$'}
+      example: proyecto-cargo-20261028-001
+    ProjectIdempotencyConditional:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Obligatorio al crear proyecto con valor/importe y en PATCH con campos
+        financieros (base_amount, billable, client_id o type); no requerido para
+        edición no financiera. ASCII imprimible sin espacios, 1–100. Repetir
+        clave/cuerpo devuelve resultado original; cambiar cuerpo da 409
+        IDEMPOTENCY_KEY_REUSED. Efecto y respuesta en la misma transacción.
+      schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[!-~]+$'}
+      example: proyecto-20261028-001
     CsrfToken:
       name: X-CSRF-Token
       in: header
@@ -1188,6 +2207,174 @@ components:
         pattern: '^[0-9]+$'
 
   responses:
+    ProjectResource:
+      description: Proyecto con versión actual y campos financieros recortados según solicitante.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Project'}
+    ProjectPage:
+      description: Proyectos visibles paginados, con recorte financiero por objeto.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/Project'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+    ProjectMemberPage:
+      description: Integrantes paginados y versión actual del proyecto.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/ProjectMember'}}
+              meta: {$ref: '#/components/schemas/ProjectPaginationMeta'}
+    ProjectStageResource:
+      description: Etapa con su versión actual y avance calculado.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/ProjectStage'}
+    ProjectStagePage:
+      description: Etapas ordenadas paginadas y versión actual del proyecto.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/ProjectStage'}}
+              meta: {$ref: '#/components/schemas/ProjectPaginationMeta'}
+    TaskResource:
+      description: Tarea con versión actual; sin campos financieros del proyecto.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Task'}
+    TaskPage:
+      description: Tareas visibles paginadas, sin importes ni notas financieras del proyecto.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/Task'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+    TaskCommentResource:
+      description: Comentario inmutable con autor y timestamp UTC del servidor.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/TaskComment'}
+    TaskCommentPage:
+      description: Comentarios paginados por fecha e ID.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/TaskComment'}}
+              meta: {$ref: '#/components/schemas/PaginationMeta'}
+    ProjectChargeResource:
+      description: Cargo con importe calculado y versión actual; no registra cobro ni gasto.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/ProjectCharge'}
+    ProjectChargePage:
+      description: Cargos paginados, resumen financiero y versión del proyecto; solo ADMIN/líder dueño.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/ProjectCharge'}}
+              meta:
+                allOf:
+                  - $ref: '#/components/schemas/ProjectPaginationMeta'
+                  - type: object
+                    required: [summary]
+                    properties:
+                      summary: {$ref: '#/components/schemas/ProjectFinancialSummary'}
+    ProjectPaymentPage:
+      description: Historial de pagos y resumen financiero; solo ADMIN/líder dueño.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/ProjectPayment'}}
+              meta:
+                allOf:
+                  - $ref: '#/components/schemas/PaginationMeta'
+                  - type: object
+                    required: [summary]
+                    properties:
+                      summary: {$ref: '#/components/schemas/ProjectFinancialSummary'}
+    TaskAgendaPage:
+      description: Proyección propia de tareas de día completo; solo fase 2.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: {type: array, items: {$ref: '#/components/schemas/TaskAgendaEntry'}}
+              meta:
+                allOf:
+                  - $ref: '#/components/schemas/PaginationMeta'
+                  - type: object
+                    required: [projection]
+                    properties:
+                      projection: {type: string, const: TASKS_PHASE_2}
+    ProjectForbidden:
+      description: |
+        FORBIDDEN por rol/objeto, CSRF_INVALID para cookie o PASSWORD_CHANGE_REQUIRED.
+        Sin importes, notas privadas ni resumen financiero en campos/mensaje;
+        mismo recorte con Bearer. Objetos no visibles producen 404 NOT_FOUND.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example:
+            error: {code: FORBIDDEN, message: No tienes permiso para esta acción.}
+            request_id: 3f9c2a1b7d8e4f60
+    ProjectConflict:
+      description: |
+        Códigos estables de fase 2: VERSION_CONFLICT, IDEMPOTENCY_KEY_REUSED,
+        INVALID_TRANSITION, REQUIRED_TASKS_INCOMPLETE, MEMBER_HAS_TASKS,
+        PROJECT_CLOSED, STAGE_CLOSED, TASK_CLOSED y TOTAL_BELOW_PAID.
+        Sin importes ni valores financieros ajenos en errores.
+        Campos desconocidos, fechas, versión ausente/incoherente o clave ausente
+        cuando es obligatoria producen 422 VALIDATION_FAILED, no 409.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example:
+            error: {code: VERSION_CONFLICT, message: El registro cambió. Recárgalo antes de continuar.}
+            request_id: 3f9c2a1b7d8e4f60
     Session:
       description: Perfil propio sin secretos y capacidades informativas; el backend reautoriza siempre.
       content:

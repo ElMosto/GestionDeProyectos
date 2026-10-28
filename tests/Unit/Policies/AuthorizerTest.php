@@ -195,26 +195,98 @@ final class AuthorizerTest extends TestCase
         $this->assertNotContains(true, $anonymous);
     }
 
-    public function test_A_project_and_sale_object_policies_deny_by_default(): void
+    public function test_A_sale_object_policy_still_denies_until_phase_three(): void
     {
-        // §5 / docs/seguridad.md §8.2 — hasta que exista la relación real (fase 2-3),
-        // las políticas por objeto de proyecto y venta devuelven false, también para
-        // el administrador. Un `true` aquí sin comprobar el objeto sería el fallo.
-        $project = ['id' => 1, 'leader_id' => self::ACTOR_ID, 'client_id' => 5, 'base_amount' => '1000.00'];
+        // §5: las ventas todavía no tienen implementación de permisos (fase 3).
         $sale = ['id' => 1, 'responsible_id' => self::ACTOR_ID, 'status' => 'BORRADOR'];
 
         foreach ([Role::ADMINISTRADOR, Role::LIDER_PROYECTO, Role::COLABORADOR, null] as $role) {
             $authorizer = self::authorizer($role);
 
-            $this->assertFalse($authorizer->canViewProject($project), (string) $role);
-            $this->assertFalse($authorizer->canManageProject($project), (string) $role);
-            $this->assertFalse($authorizer->canViewProjectFinance($project), (string) $role);
             $this->assertFalse($authorizer->canManageSale($sale), (string) $role);
         }
 
         $admin = self::authorizer(Role::ADMINISTRADOR);
         $this->assertFalse($admin->canViewProject(null));
         $this->assertFalse($admin->canManageSale(null));
+    }
+
+    public function test_B_project_visibility_and_finance_require_the_correct_relationship(): void
+    {
+        $owned = ['id' => '12', 'leader_id' => '7', 'is_member' => false];
+        $foreign = ['id' => '13', 'leader_id' => '99', 'is_member' => true];
+        foreach ([Role::ADMINISTRADOR, Role::LIDER_PROYECTO, Role::COLABORADOR, null] as $role) {
+            $policy = self::authorizer($role);
+            $this->assertSame(in_array($role, [Role::ADMINISTRADOR, Role::LIDER_PROYECTO], true), $policy->canViewProject($owned));
+            $this->assertSame(in_array($role, [Role::ADMINISTRADOR, Role::COLABORADOR], true), $policy->canViewProject($foreign));
+            foreach (['canManageProject', 'canViewProjectFinance'] as $method) {
+                $this->assertSame(in_array($role, [Role::ADMINISTRADOR, Role::LIDER_PROYECTO], true), $policy->$method($owned));
+                $this->assertSame($role === Role::ADMINISTRADOR, $policy->$method($foreign));
+                $this->assertFalse($policy->$method(null));
+            }
+        }
+    }
+
+    public function test_B_membership_must_be_a_trusted_boolean_not_a_payload_string(): void
+    {
+        $policy = self::authorizer(Role::COLABORADOR);
+        foreach ([null, false, 0, 1, '1', 'true', []] as $membership) {
+            $this->assertFalse($policy->canViewProject(['leader_id' => '99', 'is_member' => $membership]));
+        }
+        $this->assertTrue($policy->canViewProject(['leader_id' => '99', 'is_member' => true]));
+    }
+
+    public function test_B_independent_task_assignee_can_update_progress_but_not_scope(): void
+    {
+        foreach ([Role::ADMINISTRADOR, Role::LIDER_PROYECTO, Role::COLABORADOR] as $role) {
+            $policy = self::authorizer($role);
+            $own = ['id' => '1', 'stage_id' => null, 'assignee_id' => '7'];
+            $other = ['id' => '2', 'stage_id' => null, 'assignee_id' => '99'];
+            $this->assertTrue($policy->canViewTask($own));
+            $this->assertTrue($policy->canUpdateTaskProgress($own));
+            $this->assertSame($role === Role::ADMINISTRADOR, $policy->canManageTask($own));
+            $this->assertSame($role === Role::ADMINISTRADOR, $policy->canViewTask($other));
+            $this->assertSame($role === Role::ADMINISTRADOR, $policy->canUpdateTaskProgress($other));
+        }
+    }
+
+    public function test_B_project_task_visibility_does_not_grant_scope_or_other_assignees_progress(): void
+    {
+        $project = ['id' => '12', 'leader_id' => '99', 'is_member' => true];
+        $own = ['id' => '1', 'stage_id' => '5', 'assignee_id' => '7'];
+        $other = ['id' => '2', 'stage_id' => '5', 'assignee_id' => '99'];
+        $policy = self::authorizer(Role::COLABORADOR);
+        $this->assertTrue($policy->canViewTask($own, $project));
+        $this->assertTrue($policy->canViewTask($other, $project));
+        $this->assertTrue($policy->canUpdateTaskProgress($own, $project));
+        $this->assertFalse($policy->canUpdateTaskProgress($other, $project));
+        $this->assertFalse($policy->canManageTask($own, $project));
+        $this->assertFalse($policy->canUpdateTaskProgress($own, array_replace($project, ['is_member' => false])));
+        $leader = self::authorizer(Role::LIDER_PROYECTO, 99);
+        $this->assertTrue($leader->canManageTask($own, $project));
+        $this->assertTrue($leader->canUpdateTaskProgress($other, $project));
+    }
+
+    public function test_B_missing_task_parent_inactive_actor_and_malformed_ids_are_denied(): void
+    {
+        $project = ['id' => '12', 'leader_id' => '7', 'is_member' => true];
+        $task = ['id' => '1', 'stage_id' => '5', 'assignee_id' => '7'];
+        foreach ([self::authorizer(Role::ADMINISTRADOR), self::authorizer(null)] as $policy) {
+            $this->assertFalse($policy->canViewTask($task));
+            $this->assertFalse($policy->canManageTask($task));
+            $this->assertFalse($policy->canUpdateTaskProgress($task));
+            $this->assertFalse($policy->canViewTask(['assignee_id' => 7], $project));
+            $this->assertFalse($policy->canViewTask(null, $project));
+        }
+        $context = new AuthContext();
+        $context->setUser(['id' => '7', 'active' => 0, 'role_code' => Role::ADMINISTRADOR], AuthContext::METHOD_TOKEN);
+        $inactive = new Authorizer($context);
+        $this->assertFalse($inactive->canViewProject($project));
+        $this->assertFalse($inactive->canViewTask($task, $project));
+        $leader = self::authorizer(Role::LIDER_PROYECTO);
+        foreach (['7abc', true, 7.5, '07', null] as $id) {
+            $this->assertFalse($leader->canManageProject(array_replace($project, ['leader_id' => $id])));
+        }
     }
 
     public function test_A_auth_context_never_exposes_the_password_hash(): void

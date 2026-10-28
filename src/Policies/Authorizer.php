@@ -188,39 +188,45 @@ final class Authorizer
     }
 
     // -------------------------------------------------------------------------
-    // Políticas por objeto — fases 2 a 6.
-    //
-    // Todas deniegan por defecto: hasta que la fase correspondiente implemente
-    // la relación (projects.leader_id, project_members, sales.responsible_id,
-    // payments.registered_by), devolver `false` es la respuesta correcta. Un
-    // `true` aquí sin la comprobación de objeto sería exactamente el fallo que
-    // la matriz prohíbe.
+    // Proyectos y tareas (§5, §8, §16) — fase 2.
+    // Filas confiables del repositorio, nunca del payload. `is_member` es un
+    // booleano estricto calculado para el actor autenticado, no un permiso global.
     // -------------------------------------------------------------------------
 
     /**
-     * @todo Fase 2: `projects.leader_id = actor` o membresía en `project_members`,
-     *       y ADMIN siempre. "Ser miembro da acceso a ver, no a editar ni a ver finanzas".
+     * ADMIN ve cualquiera; LIDER solo el que lidera; COLABORADOR solo como miembro.
      *
      * @param array<string, mixed>|null $project
      */
     public function canViewProject(?array $project): bool
     {
-        return false;
+        if (!$this->hasActiveActor() || $project === null) {
+            return false;
+        }
+
+        return $this->can(Capabilities::PROJECTS_VIEW_ANY)
+            || ($this->can(Capabilities::PROJECTS_VIEW_OWN) && $this->actorMatches($project['leader_id'] ?? null))
+            || ($this->can(Capabilities::PROJECTS_VIEW_MEMBER) && ($project['is_member'] ?? null) === true);
     }
 
     /**
-     * @todo Fase 2: ADMIN, o LIDER con `projects.leader_id = actor`.
+     * ADMIN, o LIDER con `projects.leader_id = actor`.
      *       Un colaborador miembro nunca gestiona alcance, fechas ni integrantes.
      *
      * @param array<string, mixed>|null $project
      */
     public function canManageProject(?array $project): bool
     {
-        return false;
+        if (!$this->hasActiveActor() || $project === null) {
+            return false;
+        }
+
+        return $this->can(Capabilities::PROJECTS_MANAGE_ANY)
+            || ($this->can(Capabilities::PROJECTS_MANAGE_OWN) && $this->actorMatches($project['leader_id'] ?? null));
     }
 
     /**
-     * @todo Fase 2: ADMIN, o LIDER del proyecto. Nunca COLABORADOR sin autorización
+     * ADMIN, o LIDER del proyecto. Nunca COLABORADOR sin autorización
      *       administrativa explícita. Si es false, el serializador debe recortar
      *       `base_amount`, cargos, pagos y ticket financiero — también en .xlsx.
      *
@@ -228,7 +234,100 @@ final class Authorizer
      */
     public function canViewProjectFinance(?array $project): bool
     {
-        return false;
+        if (!$this->hasActiveActor() || $project === null) {
+            return false;
+        }
+
+        return $this->can(Capabilities::PROJECTS_VIEW_FINANCE_ANY)
+            || ($this->can(Capabilities::PROJECTS_VIEW_FINANCE_OWN) && $this->actorMatches($project['leader_id'] ?? null));
+    }
+
+    /**
+     * Ver también permite comentar (§8, matriz). Para tareas de proyecto, el
+     * repositorio debe resolver $project desde tasks.stage_id -> project_stages;
+     * no se acepta un proyecto elegido por el cliente. Sin padre se deniega.
+     *
+     * @param array<string, mixed>|null $task
+     * @param array<string, mixed>|null $project
+     */
+    public function canViewTask(?array $task, ?array $project = null): bool
+    {
+        if (!$this->hasActiveActor() || $task === null || !array_key_exists('stage_id', $task)) {
+            return false;
+        }
+
+        if ($task['stage_id'] !== null) {
+            return $this->canViewProject($project);
+        }
+
+        return $this->isAdmin()
+            || ($this->can(Capabilities::TASKS_UPDATE_ASSIGNED) && $this->actorMatches($task['assignee_id'] ?? null));
+    }
+
+    /**
+     * Alcance, fechas y asignación: solo ADMIN en independientes; ADMIN o líder
+     * del proyecto en las demás (§8). No concede cambios de avance por payload.
+     *
+     * @param array<string, mixed>|null $task
+     * @param array<string, mixed>|null $project
+     */
+    public function canManageTask(?array $task, ?array $project = null): bool
+    {
+        if (!$this->canViewTask($task, $project)) {
+            return false;
+        }
+
+        return $task['stage_id'] === null ? $this->isAdmin() : $this->canManageProject($project);
+    }
+
+    /**
+     * Avance: ADMIN/líder del proyecto o responsable COLABORADOR miembro.
+     * En independientes, ADMIN o responsable de cualquier rol admitido (§8).
+     *
+     * @param array<string, mixed>|null $task
+     * @param array<string, mixed>|null $project
+     */
+    public function canUpdateTaskProgress(?array $task, ?array $project = null): bool
+    {
+        if (!$this->canViewTask($task, $project)) {
+            return false;
+        }
+
+        if ($this->canManageTask($task, $project)) {
+            return true;
+        }
+
+        return $this->can(Capabilities::TASKS_UPDATE_ASSIGNED)
+            && $this->actorMatches($task['assignee_id'] ?? null)
+            && ($task['stage_id'] === null || $this->role() === Role::COLABORADOR);
+    }
+
+    private function hasActiveActor(): bool
+    {
+        $user = $this->user();
+
+        return $user !== null
+            && in_array($user['active'] ?? null, [true, 1, '1'], true)
+            && self::normalizedId($user['id'] ?? null) !== null;
+    }
+
+    private function actorMatches(mixed $id): bool
+    {
+        $normalized = self::normalizedId($id);
+
+        return $normalized !== null && $normalized === self::normalizedId($this->user()['id'] ?? null);
+    }
+
+    /** Comparación estricta sin truncar BIGINT ni aceptar booleanos o "7abc". */
+    private static function normalizedId(mixed $id): ?string
+    {
+        if (!is_int($id) && !is_string($id)) {
+            return null;
+        }
+
+        $value = (string) $id;
+
+        return preg_match('/\A[1-9][0-9]*\z/', $value) === 1 ? $value : null;
     }
 
     /**

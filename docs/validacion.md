@@ -1,9 +1,58 @@
 # Validación y criterios de aceptación
 
-Evidencia local del 2026-10-27. Fase 1 implementada; **no certificada para despliegue**:
+Evidencia local acumulada de fases 1–2, verificada el 2026-10-28.
+**No certificado para despliegue**:
 falta inventario real del hosting (`docs/hosting.md`). No se ocultan pruebas fallidas ni skips.
 
-## Resultado ejecutado
+## Fase 2 — verificada localmente
+
+- Instalación limpia 001–007 y seeds: correcta en base desechable independiente; 34 tablas
+  InnoDB, columna `tasks.is_required` con CHECK y valor predeterminado 1.
+- Políticas por objeto de proyectos/tareas y pruebas unitarias actualizadas: correctas.
+- QA añadió pruebas reales de proyectos, tareas, cargos, fechas, roles, idempotencia y agenda.
+  Integración ejecutada contra MariaDB real, sin pruebas omitidas ni fallos.
+- Pruebas adicionales de integración: rollback ante fallo de auditoría, importe no inferior
+  a lo cobrado y reautorización de snapshots idempotentes tras transferir liderazgo.
+- Interfaz y OpenAPI 0.4.0 integrados; **52 comprobaciones en Chromium contra PHP/MariaDB**:
+  líder crea proyecto/cargo/tarea; miembro ve sin finanzas, actualiza solo su avance y consulta
+  agenda; miembro no asignado comenta sin editar avance; ajeno es rechazado; ADMIN crea
+  independiente para líder y aparece en su agenda. XSS literal y vista móvil verificados.
+- Hallazgos resueltos: PATCH operativo sin clave obligatoria; reautorización transaccional
+  antes de devolver replay financiero; formularios normalizan opcionales vacíos a null;
+  prueba de seeds admite contadores anuales; miembros pueden comentar sin gestionar avance.
+- `composer audit --locked --no-interaction`: sin avisos de vulnerabilidades.
+
+| Nivel acumulado | Resultado actual |
+|---|---|
+| Unitarias | **129 pruebas / 700 aserciones**, OK |
+| Integración y HTTP real | **74 pruebas / 734 aserciones**, OK |
+| Total | **203 pruebas / 1.434 aserciones**, OK |
+| Navegador fase 1 | **18 comprobaciones**, OK |
+| Navegador fase 2 | **52 comprobaciones**, OK |
+| OpenAPI 0.4.0 | Válido; mismos cinco avisos informativos de la línea base |
+
+### Criterios cubiertos al cerrar fase 2
+
+- **A:** aislamiento financiero contra `GET /projects/{id}/payments` real; miembro no recibe
+  importes y líder ajeno no puede reutilizar snapshots históricos tras transferir liderazgo.
+- **B:** `ProjectsApiTest`, `TasksApiTest`, `ProjectChargesApiTest`, `ProjectIntegrityTest`,
+  `AuthorizerTest`, `MoneyTest`, `ProjectValidationTest` y `tests/Browser/phase2.mjs`.
+  Cubren validación externa/interna, asignación, presupuesto protegido, fechas, avance,
+  tareas independientes, cargos sin cobros y gastos sin modificar precio comercial.
+- No cobrable devuelve saldo `0.00` y rótulo de valor interno estimado; el dashboard de
+  cuentas por cobrar aún no existe y se probará globalmente con los criterios G en fase 6.
+- **H parcial:** rollback real ante fallo de auditoría, idempotencia y cobertura automática
+  de todas las rutas registradas en OpenAPI (`ApiContractCoverageTest`).
+
+Reproducir navegador de fase 2 con las mismas variables del smoke de fase 1:
+
+```powershell
+node tests\Browser\phase2.mjs
+```
+
+También reinicia únicamente `gestion_test`: ejecutar secuencialmente, no junto con PHPUnit.
+
+## Resultado ejecutado de fase 1 (línea base)
 
 | Nivel | Resultado |
 |---|---|
@@ -31,7 +80,7 @@ Node 24 solo como ejecutor de pruebas de desarrollo. La aplicación no requiere 
 | A — Tokens opacos, sin hash en salida y revocables | `AuthHttpTest`, `UserServiceTest` | Verde |
 | A — Cambio temporal obligatorio y revocación al cambiar contraseña | `AuthHttpTest` y navegador | Verde |
 | A — Datos sensibles y edición por creador de cliente | `ClientsApiTest`, `AuthorizerTest` | Verde |
-| A — APIs financieras de proyecto ajeno alterando IDs | Políticas futuras deniegan por defecto (`AuthorizerTest`) | Prueba del endpoint real diferida a fase 2; aún no existe |
+| A — APIs financieras de proyecto ajeno alterando IDs | `ProjectsApiTest`, `ProjectIntegrityTest` | Verde fase 2, endpoint real |
 | §7 — BANDA, duplicados, versiones, baja lógica y reservas futuras | `ClientValidationTest`, `ClientsApiTest` | Verde |
 | H — InnoDB, FK y CHECK aplicadas, migraciones limpias | `SchemaIntegrityTest`, `SchemaTool` | Verde local |
 | H — CSRF, origen, rate limit por cuenta/IP no falseable | `AuthHttpTest` | Verde local |
@@ -39,7 +88,7 @@ Node 24 solo como ejecutor de pruebas de desarrollo. La aplicación no requiere 
 | H — Avatar PNG real reprocesado 512×512; SVG/PHP renombrado/>2 MiB rechazados | `AuthHttpTest::test_H_avatar_is_reprocessed_and_rejects_active_or_oversized_content` | Verde HTTP real |
 | H/UI — Login, cambio obligatorio, crear líder, clientes, perfil, logout, colaborador | `tests/Browser/smoke.mjs` | Verde Chromium |
 | H/UI — XSS literal y perfil sin desbordamiento a 390 px | `tests/Browser/smoke.mjs` | Verde Chromium; no sustituye auditoría completa de accesibilidad |
-| B — Proyectos | Fase 2 | No implementado |
+| B — Proyectos | Suites de fase 2 descritas arriba | Verde local; agregados globales se completan en fase 6 |
 | C/D — Impresión, ventas y pagos | Fases 3 y 6 | No implementado |
 | E — Reservas/concurrencia | Fase 4 | No implementado |
 | F — Reuniones/agenda | Fase 5 | No implementado |
@@ -105,7 +154,7 @@ Se repitió la suite completa en orden aleatorio con semilla `20261027`: mismo r
 ## Limitaciones explícitas
 
 - Fase 1 tiene implementación local verificada, pero no se cierra la validación de hosting.
-- El criterio A financiero se completa con proyectos en fase 2, no con un 404 de una ruta vacía.
+- El criterio A financiero se verificó en fase 2 contra rutas reales, no con un 404 de ruta vacía.
 - No se ha realizado auditoría exhaustiva de lectores de pantalla ni contraste de cada elemento.
 - Cinco avisos informativos de Redocly: falta licencia elegida por el propietario; `health` y
   `auth/csrf` no declaran errores 4xx artificiales; componentes `IdempotencyKey` e `IfMatch`

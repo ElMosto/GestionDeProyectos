@@ -26,15 +26,20 @@ Dos mecanismos conviviendo, misma capa de autorización:
 
 Reglas de los tokens:
 
-- Se crean desde "Mi usuario → Dispositivos" o por el administrador; se muestran **una sola vez**.
+- Actualmente se crean mediante `POST /me/tokens` para el propio usuario autenticado;
+  se muestran **una sola vez**. La pantalla de dispositivos y emisión para terceros no están
+  implementadas; no se presupone un endpoint administrativo adicional.
 - Columnas mínimas: `id, user_id, name, token_hash, last_used_at, expires_at, revoked_at, created_at`.
 - Revocables individualmente (pérdida del teléfono) y en bloque al desactivar la cuenta.
-- Con Bearer **no se exige CSRF**, pero sí se valida `Origin`/`User-Agent` de forma informativa y
-  se aplica rate limit. Con cookie **sí se exige CSRF**, sin excepciones.
+- Con Bearer **no se exige CSRF ni un Origin/User-Agent de navegador**. Con cookie **sí se
+  exige CSRF**, sin excepciones, y se comprueba Origin cuando el navegador lo envía.
+  El rate limit actual protege login; límites generales por endpoint siguen pendientes.
 - Sin JWT: el token es opaco y su validez se resuelve en base de datos, lo que permite revocación
   inmediata.
 - Un token hereda rol y permisos del usuario; no se emiten permisos dentro del token.
-- Caducidad propuesta: 90 días con renovación por uso, y revocación total al cambiar contraseña.
+- Caducidad actual: 90 días fijos desde la emisión (configurable); usar el token actualiza
+  `last_used_at`, no renueva `expires_at`. La renovación deslizante sigue siendo propuesta,
+  no comportamiento implementado. Revocación total al cambiar contraseña.
 
 ## 3. Forma de las respuestas
 
@@ -71,8 +76,10 @@ reserva solapada, sobrepago), `422` (validación), `429` (rate limit), `500`.
 - **Idempotencia:** `Idempotency-Key` obligatorio en emisión de ventas, pagos, reembolsos y
   reservas. Misma clave + mismo cuerpo → se devuelve la respuesta original (mismo `200`). Misma
   clave + cuerpo distinto → `409 IDEMPOTENCY_KEY_REUSED`.
-- **Concurrencia optimista:** `If-Match: "3"` o `expected_version` en el cuerpo. Desactualizado →
-  `409 VERSION_CONFLICT` con la versión actual en `error.fields.version`.
+- **Concurrencia optimista:** `If-Match: "3"` o `expected_version` en los nuevos endpoints;
+  los endpoints de fase 1 conservan `version` en el cuerpo, sin quitar ese campo del contrato.
+  Desactualizado → `409 VERSION_CONFLICT`; `error.fields.version` contiene un mensaje, no un
+  número que el cliente deba interpretar. Recargar el recurso para obtener su versión actual.
 - **Rutas explícitas para estados:** `POST /sales/{id}/issue`, `/cancel`, `/transitions`. Nunca
   `PATCH {status}` para cambios con reglas.
 - **PATCH parcial:** solo campos enviados se modifican; lista blanca por recurso.
@@ -92,10 +99,10 @@ reserva solapada, sobrepago), `422` (validación), `429` (rate limit), `500`.
 ```json
 {
   "data": {
-    "user": { "id": "3", "name": "...", "role": "LIDER_PROYECTO", "timezone": "America/Mexico_City" },
+    "user": { "id": "3", "name": "...", "role": { "id": "2", "code": "LIDER_PROYECTO", "name": "Líder de proyecto" }, "timezone": "America/Mexico_City" },
     "capabilities": {
       "projects.create": true,
-      "projects.viewFinance": false,
+      "projects.viewFinanceOwn": true,
       "sales.create": true,
       "finance.dashboard": false,
       "tasks.createStandalone": false

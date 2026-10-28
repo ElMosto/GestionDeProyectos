@@ -1,5 +1,5 @@
 /*
- * Estilos de la aplicación (fase 1). Móvil primero, sin recursos externos.
+ * Estilos de la aplicación. Móvil primero, sin recursos externos.
  * Usa las variables de base.css; los estados nunca se distinguen solo por color.
  */
 
@@ -89,6 +89,64 @@ a:hover {
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+/* §8/§17: secciones operativas de proyectos, sin librerías externas. */
+.project-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    border-bottom: 2px solid #c6d3e6;
+    padding-bottom: 12px;
+}
+
+.project-tabs [aria-pressed="true"] {
+    background: var(--header-bg);
+    color: var(--header-text);
+    border-color: var(--header-bg);
+    text-decoration: underline;
+    text-underline-offset: 5px;
+}
+
+.project-facts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 20px;
+    background: var(--surface);
+    border: 1px solid #c6d3e6;
+    border-radius: var(--radius);
+    overflow-wrap: anywhere;
+}
+
+.project-facts dt { font-weight: 700; }
+.project-facts dd { margin-bottom: 12px; white-space: pre-wrap; }
+.work-card {
+    background: var(--surface);
+    border: 1px solid #c6d3e6;
+    border-radius: var(--radius);
+    padding: 16px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.comment-list, .work-members { padding-left: 24px; }
+.comment-list { display: flex; flex-direction: column; gap: 12px; }
+.comment-list p { white-space: pre-wrap; }
+.phase2-form fieldset { min-width: 0; border: 1px solid #8f939d; padding: 12px; }
+.phase2-form .form-row:has(input[type="checkbox"]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+}
+.phase2-form .form-row:has(input[type="checkbox"]) label { min-height: 44px; display: flex; align-items: center; }
+.phase2-form input[type="checkbox"] { width: 44px; height: 44px; }
+.phase2-form .form-row:has(input[type="checkbox"]) .field-error { grid-column: 1 / -1; }
+
+@media (min-width: 640px) {
+    .project-facts { grid-template-columns: minmax(140px, 1fr) minmax(0, 3fr); gap: 12px 24px; }
+    .project-facts dd { margin-bottom: 0; }
 }
 
 .mono {

@@ -13,6 +13,9 @@ permissions:
     resource: "src/Policies/**"
     effect: allow
   - action: edit
+    resource: "tests/Unit/Policies/**"
+    effect: allow
+  - action: edit
     resource: "src/Core/middleware.php"
     effect: allow
   - action: edit

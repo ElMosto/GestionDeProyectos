@@ -14,32 +14,31 @@ Esquema MariaDB del Sistema de Gestión para Estudio Musical. Fuente normativa:
 | 004 | `004_spaces_reservations.sql` | `spaces`, `space_hours`, `space_occupancies`, `reservations`, `space_blocks` |
 | 005 | `005_meetings_notifications.sql` | `meetings`, `meeting_invitations`, `notifications` |
 | 006 | `006_finance.sql` | `payments`, `refunds`, `expenses` |
+| 007 | `007_tasks_required.sql` | Añade `tasks.is_required` y su CHECK; no crea tablas |
 
 Después, en este orden: `database/seeds/001_roles.sql`, `002_settings.sql`, `003_sequences.sql`.
 
 Las migraciones son **correlativas e inmutables**: una vez aplicadas en un entorno con datos no se
-editan ni se renumeran. Cualquier corrección es un archivo nuevo `007_...sql`. Los archivos son
-idempotentes en el sentido de `CREATE TABLE IF NOT EXISTS`, pero el control real lo lleva
+editan ni se renumeran. Cualquier corrección es un archivo nuevo con el siguiente número libre.
+Los cambios DDL no son necesariamente repetibles por sí solos; el control real lo lleva
 `schema_migrations` (el ejecutor inserta `version`, `filename`, `checksum` y `applied_at`; si el
 `checksum` no coincide con el archivo, debe abortar: alguien editó una migración aplicada).
 
 ## Cómo aplicar
 
-Requisitos: cliente `mysql` y una base vacía con `utf8mb4_unicode_ci`.
+Requisitos: PHP 8.4, Composer instalado, base MariaDB con `utf8mb4_unicode_ci` y
+`config/config.php` con las credenciales del usuario de la aplicación.
 
 ```powershell
-$mysql = 'C:\xampp\mysql\bin\mysql.exe'
-$db = 'gestion'   # en desarrollo/pruebas: gestion_test
-
-& $mysql -h 127.0.0.1 -u gestion -p gestion $db -e "source database/migrations/001_core_auth.sql"
-# ... 002 a 006, y luego los seeds 001..003
+php bin/migrate.php
+php bin/seed.php
+# Para una base de prueba explícita (nunca una base ajena):
+php bin/migrate.php --database=gestion_test
+php bin/seed.php --database=gestion_test
 ```
 
-Unix:
-
-```bash
-mysql -h 127.0.0.1 -u gestion -p gestion < database/migrations/001_core_auth.sql
-```
+El ejecutor verifica los checksums y omite versiones aplicadas, incluida 007. No ejecutar
+archivos SQL manualmente saltándose `schema_migrations`. Los mismos comandos sirven en Unix.
 
 En producción se aplican **con respaldo previo** y con la aplicación en mantenimiento. El ejecutor
 de migraciones del backend (§18) debe:

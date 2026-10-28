@@ -25,7 +25,7 @@ marcó explícitamente en «Decisiones locales».
 | `src/Auth/Repositories/*` | SQL de cuentas, tokens, intentos, claves y auditoría |
 | `src/Policies/Role.php` | Los tres roles (D-01) |
 | `src/Policies/Capabilities.php` | Matriz rol → capacidades |
-| `src/Policies/Authorizer.php` | `requireCapability`, `requireAdmin`, políticas por objeto (`@todo`) |
+| `src/Policies/Authorizer.php` | `requireCapability`, `requireAdmin`, políticas por objeto de clientes, proyectos y tareas |
 | `src/Policies/LastAdminGuard.php` | Protección del último administrador activo |
 | `src/Core/middleware.php` | Cadena: identidad → cuenta activa → contraseña → CSRF → router |
 | `src/Core/routes/auth.php` | Rutas registradas |
@@ -108,7 +108,7 @@ token móvil después del primer cambio de contraseña.
 - `must_change_password = 1` permite únicamente:
   `GET /auth/me`, `POST /auth/logout`, `POST /me/password`, `GET /auth/csrf`, `GET /me/avatar`.
   Todo lo demás → `403 PASSWORD_CHANGE_REQUIRED` (también con Bearer).
-- `TemporaryPasswordService::issue()` (para `POST /users/{id}/reset-password`, fase 2): genera 20
+- `TemporaryPasswordService::issue()` (para `POST /users/{id}/reset-password`, fase 1): genera 20
   caracteres sin ambigüedades, guarda el hash en `password_resets` con caducidad, fija
   `must_change_password = 1` y revoca los tokens. La clave en claro se entrega una sola vez.
   Al cambiarla, `POST /me/password` consume las claves pendientes (`used_at`).
@@ -136,9 +136,9 @@ Reglas:
 1. **Deny by default.** Si una capacidad no está en la matriz, es `false`. Toda ruta privada sin
    identidad devuelve `401`; toda acción sin capacidad explícita, `403`.
 2. **Dos preguntas.** `requireCapability()` responde la pregunta global (rol). Las políticas por
-   objeto (`canViewProject`, `canManageProject`, `canViewProjectFinance`, `canManageSale`)
-   responden la segunda y **hoy devuelven `false`** con `@todo` de fase 2-3: son deliberadamente
-   cerradas hasta que exista la relación real (liderazgo, membresía, responsabilidad, propiedad).
+   objeto responden la segunda: proyectos/tareas ya comprueban liderazgo, membresía y
+   asignación. `is_member` es un booleano calculado por el repositorio, nunca del payload.
+   `canManageSale` sigue cerrado hasta fase 3.
 3. **`capabilities` es informativo.** Lo que viaja en `GET /auth/me` solo sirve para ocultar UI;
    el backend reautoriza en cada petición.
 4. **Último administrador.** `LastAdminGuard` lanza `409 LAST_ADMIN_PROTECTED` al desactivar o
@@ -223,8 +223,8 @@ public function index(Request $request): Response
     // 1) rol: capacidad global (lanza 403 si no la tiene, 401 si no hay identidad)
     $this->authorizer->requireCapability(Capabilities::USERS_MANAGE);
 
-    // 2) objeto: política por objeto (hoy deny por defecto; fase 2 la implementa)
-    //    if (!$this->authorizer->canViewProject($project)) { throw ApiException::forbidden(); }
+    // 2) objeto: además del rol, verificar la relación del actor con el registro.
+    // if (!$this->authorizer->canViewProject($project)) { throw ApiException::forbidden(); }
 
     $actor = $this->authorizer->user();   // array público, sin password_hash
     $actorId = $this->authorizer->id();   // int|null
@@ -315,7 +315,8 @@ Estado final del administrador de pruebas: contraseña `CambiarEstaClave2026!`,
 
 ## 14. Pendientes conocidos
 
-- Políticas por objeto de proyectos y ventas (`@todo` fase 2-3) — devuelven `false` a propósito.
+- Política por objeto de ventas: pendiente de fase 3. Proyectos y tareas ya implementadas y
+  verificadas contra endpoints reales; replay idempotente reautoriza antes de entregar datos.
 - `Response::stream()` en el núcleo para dejar de emitir el avatar con `exit`.
 - Rate limit general por IP para el resto de endpoints (hoy solo login, según §16).
 - `POST /users/{id}/reset-password` y `POST /users/{id}/deactivate` ya están integrados en

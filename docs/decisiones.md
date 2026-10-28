@@ -18,6 +18,11 @@ indicada.
 | D-10 | PhpSpreadsheet `^5.10` (requiere PHP ^8.2 y ext-gd). Si el hosting no tiene `gd`, se degrada a exportación CSV con aviso explícito y se replantea. | Propuesta | 6 |
 | D-11 | PHPUnit `^13.4` como dependencia de desarrollo (no se sube a producción). | Aprobada | 1 |
 | D-12 | Moneda única MXN, sin impuestos ni descuentos en el alcance inicial. | Propuesta | 3 |
+| D-13 | Avance automático por fases 1–6, incluidas pruebas, commit y push; sin esperar nueva orden. El hosting pendiente no se considera certificado por pruebas locales. | Aprobada por el usuario, 2026-10-28 | 1–6 |
+| D-14 | Tareas obligatorias (`is_required = 1` por defecto): solo COMPLETADA satisface la finalización; CANCELADA obligatoria requiere cambiar alcance o excepción ADMIN con motivo auditado. | Propuesta | 2 |
+| D-15 | Líder de proyecto = cuenta activa con rol LIDER_PROYECTO; reabrir proyecto terminal exige ADMIN y motivo; ajustes comerciales de documentos con cobros quedan reservados a ADMIN y nunca bajan el total del neto cobrado. Transiciones concretas en `docs/api-proyectos.md`. | Propuesta conservadora | 2 |
+| D-16 | Motor monetario actual único: BCMath, disponible y exigido por Composer. No se mantiene un segundo motor simultáneo. Si el inventario real de hosting demuestra que falta BCMath, se sustituirá por centavos exactos con las mismas pruebas antes de desplegar. | Propuesta | 2 |
+| D-17 | Proyectos usan contadores anuales `project.AAAA`, bloqueados en transacción; el año integra el folio. Se conservan los cinco nombres base del seed por compatibilidad, pero no se reinician contadores usados. Sustituye para proyectos la propuesta inicial del comentario del seed 003 de contador global. | Propuesta | 2 |
 
 ## Puntos abiertos heredados del §21
 

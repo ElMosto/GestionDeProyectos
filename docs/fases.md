@@ -7,7 +7,7 @@ Cada fase termina con: pruebas en verde, `docs/fases.md` actualizado, commit y `
 |---|---|---|---|
 | 0 | Esqueleto, contratos de trabajo, agentes y skills | — | **Completada** |
 | 1 | Inventario de hosting, esquema, autenticación, roles, perfiles, clientes | arquitecto-datos, seguridad-permisos, backend-php, frontend-web, qa-aceptacion | **Implementada y verificada localmente; hosting pendiente** |
-| 2 | Proyectos, etapas, tareas, membresías, tareas independientes | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | Pendiente |
+| 2 | Proyectos, etapas, tareas, membresías, tareas independientes | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
 | 3 | Productos, extras, ventas, cobros, tickets de venta | backend-php, documentos-salida, frontend-web, qa-aceptacion | Pendiente |
 | 4 | Espacios, reservas transaccionales, agenda | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | Pendiente |
 | 5 | Reuniones, invitaciones, notificaciones | backend-php, frontend-web, qa-aceptacion | Pendiente |
@@ -52,6 +52,25 @@ con un Chromium instalado y Node exclusivamente en desarrollo.
 
 Definición de terminado: se puede iniciar sesión, crear/desactivar usuarios, editar el perfil,
 crear y consultar clientes, y un colaborador no accede a rutas de administrador ni cambiando IDs.
+
+## Fase 2 — Proyectos y tareas (completada localmente, 2026-10-28)
+
+- [x] Migración 007: tareas obligatorias, CHECK y default conservador (D-14).
+- [x] Proyectos INTERNO/EXTERNO, folios seguros y edición versionada.
+- [x] Liderazgo y membresías: visibilidad filtrada en SQL y finanzas podadas en servidor.
+- [x] Etapas ordenables, tareas con responsable colaborador miembro y fechas anidadas.
+- [x] Avance operativo calculado, comentarios, historial y transiciones auditadas.
+- [x] Tareas independientes ADMIN para cualquier rol y proyección de agenda propia.
+- [x] Cargos internos exactos, separados de pagos y gastos; ajustes bajo neto rechazados.
+- [x] Reautorización antes de devolver snapshots idempotentes y rollback si falla auditoría.
+- [x] UI con proyectos, detalle, integrantes, tareas y agenda; 25 operaciones OpenAPI nuevas.
+- [x] Suite acumulada: **203 pruebas / 1.434 aserciones**; navegador real fase 2:
+  **52 comprobaciones**, más **18** de regresión de fase 1. Ver `docs/validacion.md`.
+
+La prueba A de acceso financiero a proyecto ajeno ya se ejecuta contra el endpoint real.
+La agenda de esta fase proyecta solo tareas; reservas/reuniones se añadirán en sus fases.
+No se han implementado pagos de escritura, gastos ni dashboard por adelantado.
+El hosting conserva su bloqueo de certificación, separado del desarrollo local autorizado.
 
 ## Riesgos conocidos por fase
 

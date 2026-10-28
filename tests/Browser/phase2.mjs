@@ -1,0 +1,127 @@
+/** §19.A/B: flujo real líder → miembro → ajeno → ADMIN; solo gestion_test. */
+import { withBrowser } from './support/browser.mjs';
+
+await withBrowser('tests/Support/project-browser-fixtures.php', async ({ fixtures, evaluate, wait, fill, click, navigate, check, cdp }) => {
+    const login = async (user) => {
+        await wait(`!!document.querySelector('[name=email]')`, 'Formulario de acceso');
+        await fill('email', user.email);
+        await fill('password', user.password);
+        await evaluate(`document.querySelector('form').requestSubmit()`);
+        await wait(`!!document.querySelector('#main-nav a[href="#/proyectos"]')`, 'Sesión autenticada');
+    };
+    const submitDialog = async () => evaluate(`document.querySelector('[role=dialog] form').requestSubmit()`);
+    const closeDialog = async () => {
+        await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+        await wait(`!document.querySelector('[role=dialog]')`, 'Diálogo cerrado con Escape');
+    };
+    const projectPath = `/proyectos/${fixtures.project.id}`;
+
+    await login(fixtures.leader);
+    await navigate('/proyectos');
+    await wait(`document.querySelector('#app').textContent.includes('Proyecto de navegador')`, 'Directorio de proyectos');
+    await click('Nuevo proyecto');
+    await wait(`!!document.querySelector('[role=dialog] [name=base_amount]')`, 'Formulario nuevo proyecto');
+    await fill('name', 'Interno cero navegador');
+    await fill('description', 'Creación real con importe cero.');
+    await submitDialog();
+    await wait(`!document.querySelector('[role=dialog]') && document.querySelector('#app h1')?.textContent === 'Interno cero navegador'`, 'Proyecto interno cero creado');
+    await navigate(projectPath);
+    await wait(`document.querySelector('#app h1')?.textContent === 'Proyecto de navegador'`, 'Detalle del proyecto');
+    await click('Finanzas');
+    await wait(`document.querySelector('#app').textContent.includes('12345.67 MXN')`, 'Finanzas visibles para líder');
+    await click('Añadir cargo');
+    await wait(`!!document.querySelector('[role=dialog] [name=unit_price]')`, 'Formulario cargo');
+    await fill('concept', 'Cargo de navegador');
+    await fill('unit_price', '500.00');
+    await fill('charge_date', '2026-11-05');
+    await submitDialog();
+    await wait(`!document.querySelector('[role=dialog]') && document.querySelector('#app').textContent.includes('12845.67 MXN')`, 'Cargo incrementa valor exacto');
+    await wait(`document.querySelector('#app').textContent.includes('Sin pagos registrados')`, 'Cargo no crea pago');
+    await click('Etapas y tareas');
+    await wait(`document.querySelector('#app').textContent.includes('Tarea de navegador')`, 'Etapas y tareas cargadas');
+    await click('Nueva tarea');
+    await wait(`!!document.querySelector('[role=dialog] [name=assignee_id]')`, 'Formulario tarea');
+    await fill('title', 'Segunda tarea navegador');
+    await fill('assignee_id', String(fixtures.member.id));
+    await fill('start_date', '2026-11-04');
+    await fill('end_date', '2026-11-05');
+    await submitDialog();
+    await wait(`!document.querySelector('[role=dialog]') && document.querySelector('#app').textContent.includes('Segunda tarea navegador')`, 'Tarea asignada a miembro');
+    await click('Tarea de navegador');
+    await wait(`!!document.querySelector('[role=dialog] [name=body]')`, 'Comentarios disponibles');
+    await fill('body', '<script>window.projectXss=true</script>');
+    await submitDialog();
+    await wait(`!!document.querySelector('[role=dialog] .comment-list')`, 'Comentario persistido');
+    check(await evaluate('window.projectXss === undefined'), 'Comentario se presenta como texto');
+    await closeDialog();
+    await click('Cerrar sesión');
+
+    await login(fixtures.member);
+    await navigate(projectPath);
+    await wait(`document.querySelector('#app h1')?.textContent === 'Proyecto de navegador'`, 'Miembro ve el proyecto');
+    const memberText = await evaluate(`document.querySelector('#app').textContent`);
+    check(!memberText.includes('12345.67') && !memberText.includes('12845.67') && !memberText.includes('NOTA_FINANCIERA_PRIVADA'), 'No se filtra información financiera');
+    check(!(await evaluate(`[...document.querySelectorAll('#app button')].some(n => n.textContent === 'Finanzas')`)), 'No hay pestaña financiera para miembro');
+    await navigate('/mis-tareas');
+    await wait(`document.querySelector('#app').textContent.includes('Tarea de navegador')`, 'Mis tareas del miembro');
+    await click('Tarea de navegador');
+    await wait(`!!document.querySelector('[role=dialog] [name=body]')`, 'Detalle y comentarios del miembro');
+    check(!(await evaluate(`[...document.querySelectorAll('[role=dialog] button')].some(n => n.textContent === 'Editar alcance y fechas')`)), 'Miembro no edita alcance');
+    await click('Actualizar avance');
+    await wait(`!!document.querySelector('[role=dialog] [name=progress]')`, 'Formulario avance propio');
+    await fill('progress', '40');
+    await submitDialog();
+    await wait(`!document.querySelector('[role=dialog]') && document.querySelector('#app').textContent.includes('40%')`, 'Avance guardado');
+    await navigate('/agenda');
+    await wait(`!!document.querySelector('[name=from]')`, 'Formulario agenda');
+    await fill('from', '2026-11-01');
+    await fill('to', '2026-11-30');
+    await evaluate(`document.querySelector('#app form').requestSubmit()`);
+    await wait(`document.querySelector('#app').textContent.includes('Tarea de navegador')`, 'Tarea aparece en agenda propia');
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    check(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Agenda móvil sin desbordamiento global');
+    await click('Cerrar sesión');
+
+    await login(fixtures.outsider);
+    await navigate('/proyectos');
+    await wait(`document.querySelector('#app').textContent.includes('No hay proyectos')`, 'Ajeno recibe listado vacío');
+    await navigate(projectPath);
+    await wait(`document.querySelector('#app').textContent.includes('No se pudo')`, 'Ajeno rechazado por el servidor');
+    check(!(await evaluate(`document.querySelector('#app').textContent.includes('12345.67')`)), 'Error no filtra importes');
+    await click('Cerrar sesión');
+
+    await login(fixtures.viewer);
+    await navigate(projectPath);
+    await wait(`document.querySelector('#app h1')?.textContent === 'Proyecto de navegador'`, 'Miembro sin asignación ve proyecto');
+    await click('Etapas y tareas');
+    await wait(`document.querySelector('#app').textContent.includes('Tarea de navegador')`, 'Miembro consulta tareas visibles');
+    await click('Tarea de navegador');
+    await wait(`!!document.querySelector('[role=dialog] [name=body]')`, 'Miembro no asignado puede comentar');
+    check(!(await evaluate(`[...document.querySelectorAll('[role=dialog] button')].some(n => n.textContent === 'Actualizar avance')`)), 'Comentar no concede editar avance ajeno');
+    await fill('body', 'Comentario de miembro no asignado');
+    await submitDialog();
+    await wait(`document.querySelector('[role=dialog] .comment-list')?.textContent.includes('Comentario de miembro no asignado')`, 'Comentario de miembro guardado');
+    await closeDialog();
+    await click('Cerrar sesión');
+
+    await login(fixtures.admin);
+    await navigate('/mis-tareas');
+    await wait(`document.querySelector('#app').textContent.includes('Nueva tarea independiente')`, 'ADMIN crea independientes');
+    await click('Nueva tarea independiente');
+    await wait(`!!document.querySelector('[role=dialog] [name=assignee_id]')`, 'Formulario independiente');
+    await fill('title', 'Independiente para líder');
+    await fill('assignee_id', String(fixtures.leader.id));
+    await fill('start_date', '2026-11-10');
+    await fill('end_date', '2026-11-11');
+    await submitDialog();
+    await wait(`!document.querySelector('[role=dialog]')`, 'Independiente creada');
+    await click('Cerrar sesión');
+
+    await login(fixtures.leader);
+    await navigate('/agenda');
+    await wait(`!!document.querySelector('[name=from]')`, 'Agenda del líder');
+    await fill('from', '2026-11-01');
+    await fill('to', '2026-11-30');
+    await evaluate(`document.querySelector('#app form').requestSubmit()`);
+    await wait(`document.querySelector('#app').textContent.includes('Independiente para líder')`, 'Independiente en agenda del asignado');
+});

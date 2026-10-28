@@ -1,5 +1,5 @@
 /**
- * Inicio (`#/inicio`): saludo y accesos a los módulos disponibles en la fase 1.
+ * Inicio (`#/inicio`): saludo y accesos a los módulos disponibles en las fases 1–2.
  *
  * No inventa datos de proyectos, ventas ni agenda: solo muestra lo que ya existe y
  * anuncia lo que llegará en fases posteriores (§17, §20).
@@ -20,6 +20,24 @@ export function renderInicio(container, ctx) {
         : '';
 
     const cards = [
+        {
+            title: 'Proyectos',
+            description: 'Proyectos propios o compartidos, integrantes, etapas y avance operativo.',
+            path: '/proyectos',
+            visible: ['projects.viewAny', 'projects.viewOwn', 'projects.viewMember'].some((key) => capabilities[key] === true),
+        },
+        {
+            title: 'Mis tareas',
+            description: 'Tareas asignadas, avance y comentarios. Incluye las tareas independientes.',
+            path: '/mis-tareas',
+            visible: capabilities['tasks.updateAssigned'] === true,
+        },
+        {
+            title: 'Agenda',
+            description: 'Tus tareas programadas por rango de fechas. Reuniones y reservas llegarán después.',
+            path: '/agenda',
+            visible: capabilities['agenda.viewOwn'] === true,
+        },
         {
             title: 'Clientes',
             description: 'Directorio de clientes normales y bandas. Altas y datos de contacto.',
@@ -93,7 +111,7 @@ export function renderInicio(container, ctx) {
         ]),
         panel({
             title: 'Próximas fases',
-            description: 'Proyectos, ventas y agenda llegan en las próximas fases.',
+            description: 'Ventas, reservas, reuniones y finanzas globales llegan en las próximas fases.',
             children: el('p', { class: 'panel-text', text: 'Cuando estén disponibles aparecerán en el menú. Este inicio no muestra datos de ejemplo ni cifras calculadas en el navegador.' }),
         }),
     ]);

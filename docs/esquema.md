@@ -9,6 +9,9 @@ MariaDB **10.4.32** (`gestion_test`): **34 tablas**, 0 no-InnoDB, todas `utf8mb4
 **63 claves foráneas**, **39 `CHECK` explícitos** (+7 que MariaDB genera para columnas `JSON`).
 Verificado también que las semillas son idempotentes (segunda pasada sin errores ni duplicados).
 
+Fase 2: migración **007** añade `tasks.is_required`, sin modificar las migraciones aplicadas.
+No añade tablas, índices ni estados. El estado de verificación se detalla al final.
+
 ## Convenciones
 
 - InnoDB, `utf8mb4_unicode_ci`, PK `BIGINT UNSIGNED`; FK del mismo tipo y sin `CASCADE` hacia
@@ -119,6 +122,7 @@ Verificados ejecutando las sentencias contra `gestion_test` en 10.4.32.
 | Gasto > 0 | `chk_expenses_amount` | `0` → `4025` |
 | Completar fija 100 % | `chk_tasks_completed_progress` | `COMPLETADA` con 50 → `4025` |
 | Progreso 0-100 | `TINYINT UNSIGNED` + `chk_tasks_progress` | 101 → `4025` |
+| Obligatoriedad binaria de tarea | `is_required TINYINT(1) NOT NULL DEFAULT 1` + `chk_tasks_is_required` | Solo 0/1; todas las existentes quedan en 1 |
 | Fin > inicio con hora | `chk_space_occupancies_range`, `chk_meetings_range` | Iguales o invertidos → `4025` |
 | Fin ≥ inicio en fechas | `chk_projects_*_dates`, `chk_project_stages_dates`, `chk_tasks_*_dates` | Invertidas → `4025` |
 | Cantidades > 0 | `chk_sale_items_quantity`, `chk_sale_item_extras_quantity`, `chk_project_charges_quantity` | 0 → `4025` |
@@ -157,6 +161,8 @@ Estas reglas **no** son un `CHECK`; el servicio es la única defensa y deben ten
 | `line_total` = fórmula del §10 | Depende de las filas de extras y del redondeo por partida | Calcular en backend con BCMath; el navegador nunca envía importes |
 | Venta de reserva generada junto a la reserva | Coherencia transaccional entre 3 tablas | Crear venta, ocupación y reserva en una transacción |
 | Estados y transiciones permitidas | Un `CHECK` no conoce el estado previo | Tabla de transiciones en el servicio; devolver `409`/`422` |
+| Finalización con obligatorias completas o excepción administrativa | Requiere leer tareas y rol del actor | Bloquear proyecto, consultar obligatorias y exigir motivo de excepción ADMIN no vacío; guardar auditoría en la misma transacción |
+| Asignado activo, colaborador y miembro del proyecto | Requiere leer cuenta, rol y membresía | Validar bajo bloqueo del proyecto; tareas independientes admiten cualquier rol activo (§8) |
 | Permisos por rol y por objeto | Vive en PHP | Políticas + pruebas de autorización |
 | Contenido de `audit_logs` sin secretos | Semántica del JSON | Serializar en lista blanca; nunca `password_hash` ni tokens |
 | Que el total de la venta cubra el total de la reserva | Comparación entre documentos | Validar al emitir y al reprogramar |
@@ -322,3 +328,107 @@ escritura.
   de la tabla «Lo que la base NO puede garantizar» necesita prueba de integración.
 - **DDL no transaccional:** si una migración falla a mitad, queda a medias. Se aplica con respaldo
   previo y el ejecutor registra la versión solo al terminar.
+
+## Fase 2: contrato y revisión previa a repositorios (§8, §14, §19.B)
+
+### Migración 007 y finalización
+
+- Única columna nueva: `tasks.is_required TINYINT(1) NOT NULL DEFAULT 1`, dominio `0/1`.
+  La API debe tratarla como booleano; en PDO puede llegar como entero/cadena. No cambia
+  `version`, FK ni la derivación del proyecto por `stage_id`.
+- **Propuesta conservadora:** todas las tareas, incluidas las existentes, son obligatorias
+  salvo indicación explícita del líder/administrador al definir alcance. §8 no fija el valor
+  predeterminado. Responsable de integración: registrar esta propuesta en `docs/decisiones.md`.
+- Una tarea obligatoria no `COMPLETADA` bloquea finalizar, incluida `CANCELADA`; no se presume
+  que cancelar equivalga a terminar. Puede hacerse opcional mediante cambio de alcance
+  autorizado o usarse excepción administrativa con motivo. Confirmar esta interpretación
+  conservadora antes de introducir una política distinta.
+- `is_required` no filtra el avance: todas las tareas no canceladas pesan igual; sin tareas,
+  avance 0 y «sin tareas». Para independientes el flag no participa en ninguna finalización.
+- Historial existente suficiente: `audit_logs` con `actor_id`, `action`, `entity_type`,
+  `entity_id`, `before_json`, `after_json`, `request_id`, `created_at`. Finalizar con excepción
+  debe registrar estado anterior/nuevo y motivo no vacío en JSON de lista blanca. Reabrir
+  tareas conserva los comentarios y registra estado/progreso anterior/nuevo en la misma
+  transacción; no se necesita otra tabla. No hay garantía declarativa de esta auditoría.
+
+### Consultas e índices existentes (sin índices nuevos)
+
+```sql
+-- Mis proyectos: combinar IDs de ambas ramas sin duplicados y luego unir projects.
+SELECT id FROM projects WHERE leader_id = :actor_leader
+UNION
+SELECT project_id FROM project_members WHERE user_id = :actor_member;
+-- idx_projects_leader_status; idx_project_members_user(user_id,project_id).
+-- Una rama separada por asignación, si la política la requiere, puede derivarse de tasks.
+
+SELECT * FROM tasks
+ WHERE assignee_id = :actor AND status = :status
+ ORDER BY end_date, id LIMIT 25;
+-- idx_tasks_assignee_status_end; el id es sufijo implícito InnoDB.
+-- Sin igualdad por status, ordenar por end_date puede requerir filesort: medir, no
+-- crear otro índice sin consulta/dataset real que lo justifique.
+
+SELECT t.id FROM project_stages s JOIN tasks t ON t.stage_id = s.id
+ WHERE s.project_id = :project AND t.is_required = 1
+   AND t.status <> 'COMPLETADA' LIMIT 1;
+-- idx_project_stages_project(project_id,sort_order) + idx_tasks_stage_status.
+-- is_required residual; no índice booleano independiente.
+
+SELECT user_id FROM project_members WHERE project_id = :project;
+-- uq_project_members(project_id,user_id): listado y comprobación de membresía.
+
+SELECT COALESCE(SUM(amount), 0.00) FROM project_charges
+ WHERE project_id = :project AND status = 'ACTIVO';
+-- idx_project_charges_project(project_id,charge_date); status residual.
+```
+
+No contar filas de tareas mediante joins con miembros/cargos: multiplicaría resultados.
+El valor comercial es `base_amount + SUM(cargos ACTIVO.amount)`, exacto y sin gastos;
+`amount` se calcula con aritmética decimal como redondeo a dos decimales de
+`quantity * unit_price`, una vez por cargo. La BD garantiza dominios, **no** esa igualdad.
+Dinero por JSON como string. Un cargo nunca crea pago; un interno no cobrable no genera
+cuenta por cobrar aunque tenga base/cargos. Si se reduce valor por debajo del neto cobrado,
+rechazar sin ajuste/reembolso administrativo (§8); no sobrescribir el historial.
+
+### Orden de bloqueos obligatorio para servicios
+
+1. Comenzar transacción y bloquear `projects` por PK (`SELECT ... WHERE id = ? FOR UPDATE`)
+   **antes** de tocar etapas, tareas, miembros o cargos. Si hay varios proyectos, `id` ascendente.
+2. Para una tarea, lectura preliminar de `stage_id`/proyecto solo para localizar el padre;
+   después del bloqueo releer y comprobar pertenencia. Bloquear las filas hijas necesarias por
+   PK en orden ascendente, siempre en orden estable etapas → tareas → miembros → cargos.
+   Evitar mover tareas entre proyectos sin bloquear ambos padres y volver a validar.
+3. Todas las rutas de escritura hijas (también progreso/comentarios/cambio de membresías)
+   siguen el mismo protocolo. Así finalizar y crear/modificar tareas no se intercalan; el
+   bloqueo del padre protege también la ausencia de hijos. Usar lectura actual de las tareas
+   al decidir finalización (`SELECT ... FOR UPDATE`), no una instantánea anterior.
+4. Verificar `version` esperada y actualizar `version = version + 1` en cada entidad mutable.
+   En membresías, que carecen de versión propia, usar la versión del proyecto y aumentarla.
+   No obliga a incrementar la versión del proyecto por cada comentario/progreso de tarea.
+5. Validar fechas contra padre, permisos, rol activo y membresía bajo el bloqueo; coordinar
+   desactivaciones/cambios de rol con el servicio de cuentas (lectura bloqueante de usuario
+   antes de aceptar asignación). No retirar miembros dejando asignaciones inválidas: rechazar
+   o exigir reasignación explícita. No agregar una FK redundante de tarea a membresía.
+6. Auditoría y escritura pertenecen a la misma transacción. Dinero/pagos futuros deben usar
+   el mismo bloqueo de documento antes de recalcular neto; reintentar solo deadlocks en helper
+   central. Para independientes, sin padre, bloquear tarea por PK y su versión.
+
+### Verificación de 007
+
+Verificado el 2026-10-28 en MariaDB **10.4.32**:
+
+- Aplicada por `bin/migrate.php` en `gestion` y `gestion_test`; segunda ejecución:
+  «Sin migraciones pendientes», sin diferencias de checksum.
+- `SHOW COLUMNS` en ambas bases: `tinyint(1)`, `Null=NO`, `Default=1`.
+  `information_schema.CHECK_CONSTRAINTS` confirma `chk_tasks_is_required`.
+- Aplicación de 007 a copia temporal de `tasks` sin la columna: filas con omisión/0/1
+  aceptadas con valores 1/0/1; 2 y -1 rechazados con **4025**, NULL con **1048**.
+- DOWN manual en copia temporal conserva las tres filas y elimina la columna/restricción;
+  reaplicar vuelve a marcar las tres como obligatorias. La reversión pierde la clasificación
+  opcional, por eso exige respaldo. No se revirtió `gestion`.
+- Verificación de integración posterior: instalación **completa 001–007 desde cero** en
+  `gestion_phase2_migration_test`, base desechable provisionada exclusivamente para esta prueba.
+  `bin/migrate.php` aplicó las siete migraciones y `bin/seed.php` los tres seeds sin errores.
+  Resultado: 34 tablas, todas InnoDB, siete checksums registrados y `is_required` con default 1.
+  Se eliminaron la base desechable y sus privilegios al terminar; no se reinició `gestion`
+  ni `gestion_test`. La aplicación continuó conectándose con su usuario propio, nunca root.

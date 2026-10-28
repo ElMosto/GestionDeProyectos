@@ -5,6 +5,21 @@
 
 export const PAGE_SIZE = 25;
 
+export const PROJECT_STATUSES = ['BORRADOR', 'PLANIFICADO', 'EN_CURSO', 'PAUSADO', 'FINALIZADO', 'CANCELADO'];
+export const TASK_STATUSES = ['PENDIENTE', 'EN_CURSO', 'BLOQUEADA', 'COMPLETADA', 'CANCELADA'];
+export const PRIORITIES = ['BAJA', 'MEDIA', 'ALTA', 'URGENTE'];
+const WORK_LABELS = {
+    BORRADOR: 'Borrador', PLANIFICADO: 'Planificado', EN_CURSO: 'En curso', PAUSADO: 'Pausado',
+    FINALIZADO: 'Finalizado', CANCELADO: 'Cancelado', PENDIENTE: 'Pendiente', BLOQUEADA: 'Bloqueada',
+    COMPLETADA: 'Completada', CANCELADA: 'Cancelada', INTERNO: 'Interno', EXTERNO: 'Externo',
+    BAJA: 'Baja', MEDIA: 'Media', ALTA: 'Alta', URGENTE: 'Urgente',
+    ACTIVO: 'Activo', ANULADO: 'Anulado', REGISTRADO: 'Registrado',
+    SIN_PAGOS: 'Sin pagos', PARCIAL: 'Parcial', PAGADO: 'Pagado',
+    SIN_CARGO: 'Sin cargo', NO_PAGADO: 'No pagado',
+};
+export const workLabel = (code) => WORK_LABELS[code] ?? code ?? '—';
+export const workOptions = (codes) => codes.map((value) => ({ value, label: workLabel(value) }));
+
 /** Roles del sistema. El código es el que viaja en la API. */
 export const ROLES = [
     { code: 'ADMINISTRADOR', label: 'Administrador' },

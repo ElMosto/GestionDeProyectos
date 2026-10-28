@@ -35,12 +35,19 @@ import { renderInicio } from './views/inicio.js';
 import { renderClientes } from './views/clientes.js';
 import { renderUsuarios } from './views/usuarios.js';
 import { renderMiUsuario } from './views/miUsuario.js';
+import { renderProyectos } from './views/proyectos.js';
+import { renderProyecto } from './views/proyecto.js';
+import { renderTareas } from './views/tareas.js';
+import { renderAgenda } from './views/agenda.js';
 
 const ROUTES = {
     '/inicio': { title: 'Inicio', render: renderInicio },
     '/clientes': { title: 'Clientes', render: renderClientes },
     '/usuarios': { title: 'Usuarios', render: renderUsuarios },
     '/mi-usuario': { title: 'Mi usuario', render: renderMiUsuario },
+    '/proyectos': { title: 'Proyectos', render: renderProyectos },
+    '/mis-tareas': { title: 'Mis tareas', render: renderTareas },
+    '/agenda': { title: 'Agenda', render: renderAgenda },
 };
 
 const appRoot = document.getElementById('app');
@@ -143,6 +150,8 @@ function renderChrome() {
     clear(sessionRoot);
 
     if (!session || session.mustChangePassword) {
+        // Do not leave private object dialogs visible after session expiry.
+        document.querySelectorAll('.dialog-close').forEach((control) => control.click());
         navRoot.hidden = true;
         sessionRoot.hidden = true;
 
@@ -152,10 +161,13 @@ function renderChrome() {
     const activePath = currentPath();
     const items = [
         { path: '/inicio', label: 'Inicio' },
+        { path: '/proyectos', label: 'Proyectos', allowed: ['projects.viewAny', 'projects.viewOwn', 'projects.viewMember'].some((key) => session.capabilities[key] === true) },
+        { path: '/mis-tareas', label: 'Mis tareas', capability: 'tasks.updateAssigned' },
+        { path: '/agenda', label: 'Agenda', capability: 'agenda.viewOwn' },
         { path: '/clientes', label: 'Clientes', capability: 'clients.view' },
         { path: '/usuarios', label: 'Usuarios', capability: 'users.manage' },
         { path: '/mi-usuario', label: 'Mi usuario' },
-    ].filter((item) => !item.capability || session.capabilities[item.capability] === true);
+    ].filter((item) => item.allowed !== false && (!item.capability || session.capabilities[item.capability] === true));
 
     navRoot.append(el('ul', { class: 'nav-list' }, items.map((item) => el(
         'li',
@@ -163,7 +175,7 @@ function renderChrome() {
         el('a', {
             class: 'nav-link',
             href: `#${item.path}`,
-            'aria-current': activePath === item.path ? 'page' : null,
+            'aria-current': activePath === item.path || (item.path === '/proyectos' && /^\/proyectos\/[1-9]\d*$/.test(activePath)) ? 'page' : null,
         }, item.label),
     ))));
 
@@ -250,7 +262,9 @@ async function render() {
         return;
     }
 
-    const route = ROUTES[path];
+    // IDs remain strings: BIGINT identifiers must never pass through Number.
+    const projectMatch = /^\/proyectos\/([1-9]\d*)$/.exec(path);
+    const route = projectMatch ? { title: 'Proyecto', render: (root, context) => renderProyecto(root, context, projectMatch[1]) } : ROUTES[path];
 
     if (!route) {
         setTitle('Página no encontrada');
