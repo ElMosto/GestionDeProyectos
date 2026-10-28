@@ -331,13 +331,78 @@ final class Authorizer
     }
 
     /**
-     * @todo Fase 3: ADMIN, o `sales.responsible_id = actor` para editar BORRADOR,
-     *       emitir y cancelar sin pagos. Con pagos registrados, solo ADMIN.
-     *
+     * §5, §10: fila confiable del repositorio, nunca del payload.
+     * El histórico sigue visible en cualquier estado, incluidas reservas.
+     * @param array<string, mixed>|null $sale
+     */
+    public function canViewSale(?array $sale): bool
+    {
+        return $this->hasActiveActor()
+            && $sale !== null
+            && ($this->isAdmin()
+                || ($this->can(Capabilities::SALES_VIEW_OWN) && $this->actorMatches($sale['responsible_id'] ?? null)));
+    }
+
+    /** @param array<string, mixed>|null $sale */
+    public function canViewSaleFinance(?array $sale): bool
+    {
+        return $this->canViewSale($sale);
+    }
+
+    /**
+     * §10: las reservas requieren el servicio coordinado de fase 4.
      * @param array<string, mixed>|null $sale
      */
     public function canManageSale(?array $sale): bool
     {
-        return false;
+        return $this->canViewSale($sale)
+            && ($sale['status'] ?? null) === 'BORRADOR'
+            && ($sale['type'] ?? null) === 'ORDINARIA'
+            && ($this->can(Capabilities::SALES_EDIT_DRAFT_ANY)
+                || ($this->can(Capabilities::SALES_EDIT_DRAFT_OWN) && $this->actorMatches($sale['responsible_id'] ?? null)));
+    }
+
+    /** @param array<string, mixed>|null $sale */
+    public function canIssueSale(?array $sale): bool
+    {
+        return $this->canManageSale($sale) && $this->can(Capabilities::SALES_ISSUE_OWN);
+    }
+
+    /**
+     * D-18 / §10: solo ADMIN, también sin pagos. El servicio exige motivo,
+     * neto cero y coordinación de reservas; la policy no reemplaza esas reglas.
+     * @param array<string, mixed>|null $sale
+     */
+    public function canCancelSale(?array $sale): bool
+    {
+        return $this->canViewSale($sale)
+            && $this->isAdmin()
+            && $this->can(Capabilities::SALES_CANCEL_WITHOUT_PAYMENTS_ANY);
+    }
+
+    /**
+     * §11: reservas se cobran únicamente mediante su venta emitida.
+     * @param array<string, mixed>|null $sale
+     */
+    public function canRegisterSalePayment(?array $sale): bool
+    {
+        return $this->canViewSale($sale)
+            && $this->can(Capabilities::PAYMENTS_REGISTER_OWN)
+            && ($sale['status'] ?? null) === 'EMITIDA'
+            && in_array($sale['type'] ?? null, ['ORDINARIA', 'RESERVA'], true);
+    }
+
+    /**
+     * §11: finalizar no liquida saldo; cancelar impide nuevos cobros.
+     * El backend resuelve el documento; registered_by no concede acceso.
+     * @param array<string, mixed>|null $project
+     */
+    public function canRegisterProjectPayment(?array $project): bool
+    {
+        return $this->canViewProjectFinance($project)
+            && $this->can(Capabilities::PAYMENTS_REGISTER_PROJECT)
+            && in_array($project['billable'] ?? null, [true, 1, '1'], true)
+            && isset($project['status'])
+            && $project['status'] !== 'CANCELADO';
     }
 }

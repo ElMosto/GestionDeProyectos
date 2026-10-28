@@ -170,7 +170,6 @@ final class Capabilities
             self::SALES_VIEW_OWN,
             self::SALES_EDIT_DRAFT_OWN,
             self::SALES_ISSUE_OWN,
-            self::SALES_CANCEL_WITHOUT_PAYMENTS_OWN,
             self::SALES_TICKET_OWN,
             self::PAYMENTS_REGISTER_OWN,
             self::PAYMENTS_REGISTER_PROJECT,

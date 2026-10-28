@@ -12,6 +12,15 @@ permissions:
   - action: edit
     resource: "templates/**"
     effect: allow
+  - action: edit
+    resource: "public/assets/css/tickets.css"
+    effect: allow
+  - action: edit
+    resource: "public/assets/js/ticket.js"
+    effect: allow
+  - action: edit
+    resource: "tests/Unit/Exports/**"
+    effect: allow
 ---
 
 Eres el responsable de todo lo que el usuario descarga o imprime. Carga `salidas-impresas`,

@@ -1,5 +1,5 @@
 /**
- * Inicio (`#/inicio`): saludo y accesos a los módulos disponibles en las fases 1–2.
+ * Inicio (`#/inicio`): saludo y accesos a los módulos disponibles en las fases 1–3.
  *
  * No inventa datos de proyectos, ventas ni agenda: solo muestra lo que ya existe y
  * anuncia lo que llegará en fases posteriores (§17, §20).
@@ -43,6 +43,18 @@ export function renderInicio(container, ctx) {
             description: 'Directorio de clientes normales y bandas. Altas y datos de contacto.',
             path: '/clientes',
             visible: capabilities['clients.view'] === true,
+        },
+        {
+            title: 'Ventas',
+            description: 'Ventas ordinarias, partidas con extras, tickets, abonos y saldos.',
+            path: '/ventas',
+            visible: capabilities['sales.viewOwn'] === true,
+        },
+        {
+            title: 'Productos y extras',
+            description: 'Catálogo de productos, servicios y extras permitidos por producto.',
+            path: '/productos',
+            visible: capabilities['catalog.view'] === true,
         },
         {
             title: 'Usuarios',
@@ -111,7 +123,7 @@ export function renderInicio(container, ctx) {
         ]),
         panel({
             title: 'Próximas fases',
-            description: 'Ventas, reservas, reuniones y finanzas globales llegan en las próximas fases.',
+            description: 'Reservas, reuniones y finanzas globales llegan en las próximas fases.',
             children: el('p', { class: 'panel-text', text: 'Cuando estén disponibles aparecerán en el menú. Este inicio no muestra datos de ejemplo ni cifras calculadas en el navegador.' }),
         }),
     ]);

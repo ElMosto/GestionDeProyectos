@@ -432,3 +432,136 @@ Verificado el 2026-10-28 en MariaDB **10.4.32**:
   Resultado: 34 tablas, todas InnoDB, siete checksums registrados y `is_required` con default 1.
   Se eliminaron la base desechable y sus privilegios al terminar; no se reinició `gestion`
   ni `gestion_test`. La aplicación continuó conectándose con su usuario propio, nunca root.
+
+## Fase 3: revisión previa de ventas y cobros (§10, §11, §14)
+
+### Migración 008: contrato DDL y conservación
+
+`008_sales_cancelled_draft.sql` sustituye únicamente `sales.chk_sales_issued_at` por:
+
+```sql
+CHECK (status <> 'EMITIDA' OR issued_at IS NOT NULL)
+```
+
+No añade columnas, tablas, índices, estados ni políticas. `sales.issued_at` sigue siendo
+`DATETIME NULL` UTC: al emitir es obligatorio; al cancelar un borrador queda NULL; al cancelar
+una venta emitida se conserva la emisión histórica. El servicio controla la transición y no
+borra ni inventa fechas. La restricción anterior de 003 también exigía fecha a CANCELADA y
+por tanto impedía cancelar un borrador honestamente. No se modifica 003 ya aplicada.
+
+DOWN restaura el CHECK anterior, **solo si no existen CANCELADA con issued_at NULL**. El bloque
+documentado incluye esa consulta previa; no se deben borrar filas ni fabricar emisiones para
+revertir. DDL tiene commit implícito: respaldo previo y mantenimiento sin escrituras concurrentes.
+
+El esquema existente basta para cancelaciones y reembolsos: `audit_logs` registra actor,
+acción, entidad, request_id, antes/después y motivo mediante JSON de lista blanca, en la misma
+transacción. `payments` ya tiene `voided_at`, `voided_by`, `void_reason`; `refunds` tiene
+`reason`, registrador y metadatos de anulación. No se duplican esos datos en nuevas tablas o
+columnas de cancelación de venta. Exigir motivo **no vacío** y auditoría, autorización ADMIN,
+transiciones y resolución financiera corresponde al servicio: el CHECK de anulación de pagos
+solo exige no NULL y no asegura contenido significativo; refunds no tiene CHECK equivalente.
+
+### Idempotencia: compatibilidad sin cambio de columna
+
+Propuesta para integrar en backend y decisiones: mantener `payments.idempotency_key` y
+`refunds.idempotency_key` como `VARCHAR(100) NOT NULL UNIQUE`, pero guardar un SHA-256 hexadecimal
+de 64 caracteres, no la clave HTTP cruda. Preimagen inequívoca: array JSON ordenado de cuatro
+cadenas `[actor_id decimal, operation, canonical_path, raw_key]`, UTF-8 sin escapar Unicode ni
+barras. `operation` es el identificador estable de la acción (incluido su método semántico);
+`canonical_path` incluye el ID concreto del recurso y excluye host/query string. No concatenar
+campos sin delimitación inequívoca. Misma petición produce el mismo hash; dos actores con la
+misma clave no colisionan. Los valores históricos no se reescriben.
+
+Esto sustituye **para las nuevas escrituras de fase 3** el comportamiento de colisión entre
+usuarios descrito en la decisión de diseño 6 de fase 1. `idempotency_requests` conserva su único
+`(actor_id, operation, key)` y la clave HTTP original: no cambia el contrato público. El hash
+del contenido para replay debe incluir método y ruta canónica además del cuerpo normalizado;
+la misma clave en otra ruta, dentro de igual actor/operación, debe dar conflicto, no devolver
+la respuesta de otro recurso. La operación/hash no se usa como autorización. No usar
+`INSERT IGNORE`: reservar, comprobar contenido y guardar respuesta con la escritura financiera
+en la misma transacción, como en el protocolo existente de proyectos.
+
+### Folios y bloqueos
+
+- Ventas, pagos y reembolsos usan los nombres globales del seed `sale`, `payment`, `refund`
+  y prefijos `VTA`, `PAG`, `REE`, sin reinicio anual. Año UTC del documento + contador global;
+  mantener longitud máxima de `folio VARCHAR(24)` y rechazar desbordamientos, no truncar.
+- Bloquear/actualizar la fila de `sequences` en la misma transacción del documento y obtener
+  el número reservado con `LAST_INSERT_ID(next_value)` o lectura bloqueante seguida de UPDATE.
+  Nunca `MAX(id)+1`, nunca resetear una secuencia usada. Verificar que existe la fila.
+- **Aclaración sobre rollback:** `sequences` es InnoDB: rollback revierte su incremento junto
+  con el documento. No se garantiza ausencia de huecos (p. ej. AUTO_INCREMENT); no es cierto
+  que ese incremento transaccional se pierda necesariamente como indicaba la explicación
+  inicial de Folios. La identidad de un documento confirmado nunca se reutiliza.
+- Proyectos conservan el contrato anual ya implementado `project.AAAA` de D-17; no se cambia
+  ni se aplica silenciosamente a ventas/cobros. Esta diferencia debe constar en decisiones.
+- Orden financiero: documento (`sales` o `projects`) por PK **antes** de sus payments, después
+  refunds; cada conjunto por ID ascendente. Para localizar documento desde pago/reembolso,
+  la primera lectura solo localiza; tras bloquear el padre releer/verificar pertenencia.
+  Cobrar, reembolsar, anular, modificar total y cancelar siguen este mismo orden.
+- Leer pagos/reembolsos actuales con `SELECT ... FOR UPDATE` después de adquirir el padre;
+  no recalcular usando una instantánea REPEATABLE READ abierta antes de esperar ese bloqueo.
+  El padre serializa también el caso de ausencia de pagos. Validar versión esperada y aumentar
+  `version` en la entidad modificada; auditoría en la misma transacción, reintento central de
+  deadlocks. Adquirir secuencias después de las filas financieras, en orden estable por nombre
+  si una operación reserva varios tipos.
+- En fase 4, cualquier cancelación/reprogramación de reserva toma primero `spaces` por ID,
+  luego documento y filas financieras. No introducir una ruta inversa documento → espacio.
+  Una venta RESERVA no puede cancelarse aisladamente liberando solo su estado financiero.
+
+Sobrepago, reembolso excesivo, anular pago ya reembolsado y cancelar con dinero sin resolver
+son reglas entre filas: siguen en servicio, no quedan garantizadas por 008. Las operaciones
+administrativas deben resolverlas explícitamente, nunca borrar historia ni convertir anulación
+en devolución real. El estado de pago es calculado; total cero = SIN_CARGO sin pago ficticio.
+
+### Saldos e índices existentes
+
+No se añaden índices sin una consulta real que demuestre necesidad. Las rutas de esta fase ya
+tienen cobertura por responsable/fecha y estado/fecha en sales; payments por sale_id/project_id;
+refunds por payment_id/fecha; lectura de partidas por sale_id/orden y extras por sale_item_id.
+Las restricciones únicas de folio/idempotencia y los índices FK existentes no cambian.
+
+Consulta de lectura de neto de una venta, sin multiplicar el pago por cada reembolso:
+
+```sql
+SELECT COALESCE(SUM(p.amount - COALESCE((
+  SELECT SUM(r.amount) FROM refunds r
+   WHERE r.payment_id = p.id AND r.status = 'REGISTRADO'
+), 0.00)), 0.00) AS net_collected
+FROM payments p
+WHERE p.sale_id = :sale AND p.status = 'REGISTRADO';
+-- idx_payments_sale + idx_refunds_payment(payment_id,effective_at).
+-- Para proyecto: reemplazar únicamente sale_id por project_id.
+```
+
+Para corte temporal, filtrar `effective_at` en **ambas** ramas; para flujos del periodo sumar
+pagos y reembolsos por separado con sus propias fechas efectivas. No sumar payments.amount en
+un JOIN directo 1:N a refunds. Para varias ventas, preagregar cada relación a una fila por
+padre antes de unir; tampoco unir simultáneamente partidas, extras y pagos para sumar totales.
+La consulta anterior es para lectura: no sustituye el protocolo bloqueante de escritura.
+
+### Verificación de 008 (2026-10-28)
+
+MariaDB real **10.4.32**, cliente de aplicación `gestion`:
+
+- `bin/migrate.php --database=gestion` y `--database=gestion_test`: **1 migración aplicada**
+  en cada base. Segunda pasada: **Sin migraciones pendientes** en ambas; ocho versiones y
+  CHECK nuevo confirmado en information_schema. Ninguna tabla truncada ni datos de desarrollo
+  reiniciados; sales tenía 0 filas antes y después en ambas bases.
+- Instalación **001–008 desde cero** por el mismo ejecutor en base dedicada desechable
+  `gestion_phase3_migration_test`: ocho migraciones, **34 tablas**, **0 no-InnoDB**,
+  **0 con collation distinta de utf8mb4_unicode_ci**. Provisionamiento/limpieza mediante
+  cuenta local administrativa; migraciones y verificación con el usuario de la aplicación.
+- En esa base, restaurado el CHECK antiguo y creadas tres ventas históricas de prueba
+  (BORRADOR NULL, EMITIDA con fecha, CANCELADA con fecha). Aplicar 008 conserva las tres:
+  `CHECKSUM TABLE sales EXTENDED` **3242122229 → 3242122229**. DOWN en estado compatible
+  conserva también checksum **3242122229**; reaplicación correcta.
+- Cambiar el borrador a CANCELADA conservando NULL: **aceptado, 1 fila**. INSERT de EMITIDA
+  NULL y UPDATE a EMITIDA NULL: ambos **ERROR 4025 (23000)**, salida de cliente 1.
+- DOWN con el borrador ya cancelado NULL: **ERROR 4025**, no pierde filas ni el CHECK nuevo;
+  siguen tres ventas. La reversión condicionada está probada, no se forzó sobre datos válidos.
+- Un pago de **120.00** con reembolsos de **20.00** y **30.00**: subconsulta devuelve neto
+  **70.00**; un JOIN directo multiplica erróneamente el pago a **240.00** (dos filas).
+- Base dedicada y sus privilegios retirados al terminar. No quedan fixtures en gestion ni
+  gestion_test. No se ejecutaron ni modificaron pruebas PHP: la integración funcional y de
+  concurrencia de fase 3 corresponde al backend/QA antes de cerrar la fase.

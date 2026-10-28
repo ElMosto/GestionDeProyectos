@@ -22,6 +22,12 @@ permissions:
     resource: "docs/api-proyectos.md"
     effect: allow
   - action: edit
+    resource: "docs/api-ventas.md"
+    effect: allow
+  - action: edit
+    resource: "docs/api-pagos.md"
+    effect: allow
+  - action: edit
     resource: "src/Auth/**"
     effect: deny
   - action: edit

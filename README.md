@@ -4,8 +4,8 @@ Aplicación web privada para gestionar proyectos, clientes, ventas, reservas, ag
 reuniones y finanzas de un estudio musical.
 
 - **Stack:** PHP 8.4 (sin framework) · MariaDB · Apache · HTML/CSS/JS con módulos ES.
-- **Estado:** fases 1–2 funcionales y verificadas localmente.
-  Acceso, perfiles, usuarios, clientes, proyectos, etapas, tareas y agenda propia disponibles.
+- **Estado:** fases 1–3 funcionales y verificadas localmente.
+  Acceso, usuarios, clientes, proyectos, tareas, catálogo, ventas, cobros y tickets disponibles.
   La validación del hosting sigue pendiente; no es una certificación de producción.
 - **Especificación:** [`docs/requerimiento-v1.0.md`](docs/requerimiento-v1.0.md).
 

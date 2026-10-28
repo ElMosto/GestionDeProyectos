@@ -16,6 +16,8 @@ const WORK_LABELS = {
     ACTIVO: 'Activo', ANULADO: 'Anulado', REGISTRADO: 'Registrado',
     SIN_PAGOS: 'Sin pagos', PARCIAL: 'Parcial', PAGADO: 'Pagado',
     SIN_CARGO: 'Sin cargo', NO_PAGADO: 'No pagado',
+    EMITIDA: 'Emitida', ORDINARIA: 'Ordinaria', RESERVA: 'Reserva',
+    VALID: 'Válido', VOID: 'Anulado', EFFECTIVE: 'Efectivo',
 };
 export const workLabel = (code) => WORK_LABELS[code] ?? code ?? '—';
 export const workOptions = (codes) => codes.map((value) => ({ value, label: workLabel(value) }));

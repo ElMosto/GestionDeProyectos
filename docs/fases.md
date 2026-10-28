@@ -8,7 +8,7 @@ Cada fase termina con: pruebas en verde, `docs/fases.md` actualizado, commit y `
 | 0 | Esqueleto, contratos de trabajo, agentes y skills | — | **Completada** |
 | 1 | Inventario de hosting, esquema, autenticación, roles, perfiles, clientes | arquitecto-datos, seguridad-permisos, backend-php, frontend-web, qa-aceptacion | **Implementada y verificada localmente; hosting pendiente** |
 | 2 | Proyectos, etapas, tareas, membresías, tareas independientes | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
-| 3 | Productos, extras, ventas, cobros, tickets de venta | backend-php, documentos-salida, frontend-web, qa-aceptacion | Pendiente |
+| 3 | Productos, extras, ventas, cobros, tickets de venta | backend-php, documentos-salida, frontend-web, qa-aceptacion | **Completada localmente** |
 | 4 | Espacios, reservas transaccionales, agenda | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | Pendiente |
 | 5 | Reuniones, invitaciones, notificaciones | backend-php, frontend-web, qa-aceptacion | Pendiente |
 | 6 | Dashboard, gastos, Gantt XLSX, auditoría, pruebas, despliegue | backend-php, documentos-salida, seguridad-permisos, qa-aceptacion | Pendiente |
@@ -71,6 +71,21 @@ La prueba A de acceso financiero a proyecto ajeno ya se ejecuta contra el endpoi
 La agenda de esta fase proyecta solo tareas; reservas/reuniones se añadirán en sus fases.
 No se han implementado pagos de escritura, gastos ni dashboard por adelantado.
 El hosting conserva su bloqueo de certificación, separado del desarrollo local autorizado.
+
+## Fase 3 — Ventas, cobros y tickets (completada localmente)
+
+- [x] Migración 008: cancelar borradores sin inventar fecha de emisión.
+- [x] Catálogos administrables, extras permitidos y conceptos libres solo ADMIN.
+- [x] Borradores recalculados, snapshots definitivos al emitir y partidas exactas.
+- [x] Cobros de ventas/proyectos, atajo de saldo, anulaciones y reembolsos auditados.
+- [x] Idempotencia y reautorización; carreras reales sin sobrepago ni exceso de devolución.
+- [x] Tickets HTML autorizados 80 mm/A4, escape, historial y aviso no fiscal.
+- [x] UI y OpenAPI 0.5.0; **254 pruebas / 4.158 aserciones**, todas verdes.
+- [x] Navegador: **56** comprobaciones de fase 3, más **18 + 52** de regresión.
+
+Impresión comprobada con el motor de Chromium, incluidos texto largo y A4 multipágina.
+Queda pendiente una impresora térmica física, sin afirmar esa certificación ni la del hosting.
+Dashboard, gastos, reservas y XLSX siguen en sus fases correspondientes.
 
 ## Riesgos conocidos por fase
 

@@ -64,7 +64,7 @@ rol. Toda celda con "Propio" exige comprobación de objeto además del rol.
 | Ver venta | ✔ | Propias | Propias | |
 | Editar venta en BORRADOR | ✔ | Propias | Propias | Emitida exige ajuste admin |
 | Emitir venta | ✔ | Propias | Propias | `Idempotency-Key` |
-| Cancelar venta sin pagos | ✔ | Propias | — | Con motivo |
+| Cancelar venta sin pagos | ✔ | — | — | D-18 / §10: solo ADMIN, con motivo |
 | Cancelar venta con pagos | ✔ | — | — | Resolución de reembolso |
 | Registrar pago | ✔ | Proyectos propios + ventas/reservas propias | Ventas/reservas propias | |
 | Anular pago | ✔ | — | — | Motivo + auditoría |

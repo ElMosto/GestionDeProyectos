@@ -1,10 +1,36 @@
 # Validación y criterios de aceptación
 
-Evidencia local acumulada de fases 1–2, verificada el 2026-10-28.
+Evidencia local acumulada de fases 1–3.
 **No certificado para despliegue**:
 falta inventario real del hosting (`docs/hosting.md`). No se ocultan pruebas fallidas ni skips.
 
-## Fase 2 — verificada localmente
+## Fase 3 — verificada localmente
+
+- Suite completa aleatoria: **254 pruebas / 4.158 aserciones**, sin fallos ni skips.
+  Comando: `php vendor/bin/phpunit --order-by=random --random-order-seed=20261028`.
+- `CatalogApiTest`, `SalesApiTest`, `PaymentsApiTest`, `PaymentsContractTest` y
+  `FinancialConcurrencyTest` cubren §19.D: fórmula 120.00, redondeo por partida,
+  snapshots al emitir, PARCIAL/PAGADO, SIN_CARGO sin asiento, permisos e idempotencia.
+- Tres carreras con procesos PHP y conexiones MariaDB independientes verifican cobros
+  600+600 sobre 1000, replay simultáneo y reembolsos limitados. La barrera mantiene
+  el documento bloqueado hasta observar ambos workers ejecutando SQL. El monitor admite
+  tanto `Query` como `Execute` (consultas preparadas); no es una prueba secuencial simulada.
+- Versiones de documentos/pagos/reembolsos normalizadas a strings, con regresión de contrato.
+- **56 comprobaciones de navegador** en `node tests/Browser/phase3.mjs`: catálogo y extras,
+  venta de 120.00, emisión sin cobro, abono y saldo, marcar pagada, snapshot histórico,
+  acceso ajeno rechazado, devolución/anulación ADMIN y proyecto finalizado todavía cobrable.
+- Ticket autorizado coincide con API, aviso fiscal presente y reimpresión sin movimientos;
+  texto largo conserva última partida en 80 mm/A4, sin desbordamiento horizontal en medio
+  de impresión; PDF de prueba de Chromium válido y A4 multipágina. Artefactos de diagnóstico
+  fuera del repositorio: `%TEMP%/opencode/gestion-ticket-phase3-{80mm,A4}.pdf`.
+  **No se probó impresora térmica física**: esa verificación queda para aceptación en el estudio.
+- Regresión de navegador: fase 1 **18**, fase 2 **52**, ambas verdes.
+- Lint: **151 PHP**, **25 módulos JS**, correctos; `git diff --check` limpio.
+- OpenAPI **0.5.0** válido con los cinco avisos ya documentados. Cobertura automática
+  contrasta todas las operaciones registradas, incluidos catálogos con rutas literales.
+- Composer audit: sin avisos de vulnerabilidades. Hosting continúa sin certificar.
+
+## Fase 2 — verificada localmente (línea base)
 
 - Instalación limpia 001–007 y seeds: correcta en base desechable independiente; 34 tablas
   InnoDB, columna `tasks.is_required` con CHECK y valor predeterminado 1.

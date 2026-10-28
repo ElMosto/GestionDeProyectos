@@ -177,7 +177,7 @@ final class SchemaIntegrityTest extends DatabaseTestCase
         $versions = $this->pdo->query('SELECT version FROM schema_migrations ORDER BY version')
             ->fetchAll(\PDO::FETCH_COLUMN);
 
-        $this->assertSame(['001', '002', '003', '004', '005', '006', '007'], $versions);
+        $this->assertSame(['001', '002', '003', '004', '005', '006', '007', '008'], $versions);
 
         $roles = $this->pdo->query('SELECT code FROM roles ORDER BY id')->fetchAll(\PDO::FETCH_COLUMN);
         $this->assertSame(['ADMINISTRADOR', 'LIDER_PROYECTO', 'COLABORADOR'], $roles);

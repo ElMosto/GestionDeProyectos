@@ -23,6 +23,8 @@ indicada.
 | D-15 | Líder de proyecto = cuenta activa con rol LIDER_PROYECTO; reabrir proyecto terminal exige ADMIN y motivo; ajustes comerciales de documentos con cobros quedan reservados a ADMIN y nunca bajan el total del neto cobrado. Transiciones concretas en `docs/api-proyectos.md`. | Propuesta conservadora | 2 |
 | D-16 | Motor monetario actual único: BCMath, disponible y exigido por Composer. No se mantiene un segundo motor simultáneo. Si el inventario real de hosting demuestra que falta BCMath, se sustituirá por centavos exactos con las mismas pruebas antes de desplegar. | Propuesta | 2 |
 | D-17 | Proyectos usan contadores anuales `project.AAAA`, bloqueados en transacción; el año integra el folio. Se conservan los cinco nombres base del seed por compatibilidad, pero no se reinician contadores usados. Sustituye para proyectos la propuesta inicial del comentario del seed 003 de contador global. | Propuesta | 2 |
+| D-18 | Cancelar ventas: solo ADMIN por §10 (más restrictivo que la matriz previa que permitía líder sin pagos). Motivo obligatorio; con neto cobrado positivo se rechaza hasta resolver explícitamente reembolsos/anulaciones. No se inventan penalizaciones ni devolución automática. | Propuesta conservadora ante contradicción | 3 |
+| D-19 | En payments/refunds, `idempotency_key` guarda SHA-256 de `[actor,operation,path,key HTTP]`, conservando la clave HTTP original en el registro de solicitudes. Evita colisiones entre actores de las columnas UNIQUE globales. Folios de ventas/pagos/reembolsos usan secuencias globales del seed. | Propuesta | 3 |
 
 ## Puntos abiertos heredados del §21
 

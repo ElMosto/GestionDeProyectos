@@ -4,6 +4,7 @@ import { PROJECT_STATUSES, workLabel, workOptions } from '../data.js';
 import { button, cap, completeCollection, dateText, directory, editDialog, finance, idPath, loadSection, manages, moneyText, pagedList, roleCode, selectField } from '../project-ui.js';
 import { chargeForm, projectForm, stageForm } from '../project-forms.js';
 import { taskDetail, taskForm, taskTable } from '../task-ui.js';
+import { renderPayments } from '../payment-ui.js';
 
 export async function renderProyecto(root, ctx, id) {
     let active = 'Resumen';
@@ -185,14 +186,7 @@ export async function renderProyecto(root, ctx, id) {
                     { label: 'Fecha', render: (c) => dateText(c.charge_date) },
                     ...(edit ? [{ label: 'Acciones', render: (c) => button('Editar cargo', () => chargeForm(p, c, reload)) }] : []),
                 ] }), 'cargos');
-        const paymentRows = el('div', { class: 'stack' });
-        mount(payments, [el('h3', { text: 'Pagos registrados' }), paymentRows]);
-        const paymentList = pagedList(paymentRows, `${path}/payments`, {}, (data) => dataTable({ caption: 'Historial de pagos', rows: data, emptyTitle: 'Sin pagos registrados', columns: [
-                    { label: 'Fecha', render: (payment) => formatDateTime(payment.effective_at, ctx.session.user.timezone) },
-                    { label: 'Importe', render: (payment) => moneyText(payment.amount, p.currency) },
-                    { label: 'Estado', render: (payment) => workLabel(payment.status) },
-                ] }), 'pagos');
-        await Promise.all([chargeList.load(), paymentList.load()]);
+        await Promise.all([chargeList.load(), renderPayments(payments, ctx, p, 'project', reload)]);
     }
 
     await reload();

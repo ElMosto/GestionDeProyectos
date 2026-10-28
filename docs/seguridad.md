@@ -323,3 +323,32 @@ Estado final del administrador de pruebas: contraseña `CambiarEstaClave2026!`,
   fase 1 con `TemporaryPasswordService`, `TokenService::revokeAll` y `LastAdminGuard`,
   cubiertos por `UserServiceTest` y `AuthHttpTest`.
 - Rotación de `session.save_path` y limpieza de sesiones vencidas por cron en el hosting (§18).
+
+## 15. Políticas de ventas y pagos — fase 3
+
+Esta sección sustituye las referencias históricas de §8/§14 a ventas pendientes y la concesión
+antigua de cancelación sin pagos al líder: D-18 aplica §10, la regla más restrictiva.
+
+- `canViewSale` y `canViewSaleFinance`: ADMIN o responsable de la venta, en cualquier estado
+  histórico y tipo ORDINARIA/RESERVA. El serializador y el historial financiero usan esta policy.
+- `canManageSale` y `canIssueSale`: ADMIN o responsable, exclusivamente BORRADOR ORDINARIA.
+  Una venta RESERVA no se edita ni emite mediante el servicio de ventas ordinarias.
+- `canCancelSale`: solo ADMIN, incluso sin pagos. El servicio exige motivo, neto cobrado cero
+  y coordinación de reservas; no hay reembolso automático. La constante
+  `SALES_CANCEL_WITHOUT_PAYMENTS_OWN` se conserva por compatibilidad, pero es false para LIDER.
+- `canRegisterSalePayment`: ADMIN o responsable, venta EMITIDA ORDINARIA/RESERVA. Las reservas
+  se cobran exclusivamente mediante su venta (§11).
+- `canRegisterProjectPayment`: ADMIN o LIDER que puede ver finanzas del proyecto, `billable`
+  estrictamente true/1/'1' y estado presente distinto de CANCELADO. FINALIZADO admite saldo.
+- Objetos nulos, identidad ausente o inválida y cuentas inactivas se deniegan. Las relaciones
+  usan IDs enteros o strings decimales canónicos sin truncamientos BIGINT ni coerción booleana.
+- Los servicios cargan documentos confiables desde el repositorio antes de autorizar y reautorizan
+  también los replays idempotentes (D-19). Nunca se aceptan relaciones tomadas del payload.
+  `registered_by` no concede visibilidad del pago: manda el documento vinculado. Anular/reembolsar
+  exige `requireAdmin`; no existe una policy genérica que confíe en campos de pago del cliente.
+- Las capacidades son informativas; no reemplazan autorización por objeto, transacciones,
+  idempotencia, límites monetarios ni auditoría sin secretos (§16).
+
+Cobertura propia: `tests/Unit/Policies/AuthorizerTest.php` y `CapabilitiesTest.php` verifican
+propio/ajeno, roles, estados históricos, RESERVA, cancelación ADMIN, proyectos cobrables y
+FINALIZADO/CANCELADO, actores inactivos, nulos e IDs malformados o BIGINT.

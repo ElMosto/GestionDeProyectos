@@ -195,20 +195,91 @@ final class AuthorizerTest extends TestCase
         $this->assertNotContains(true, $anonymous);
     }
 
-    public function test_A_sale_object_policy_still_denies_until_phase_three(): void
+    public function test_D_sale_relationship_and_states_are_authorized_independently(): void
     {
-        // §5: las ventas todavía no tienen implementación de permisos (fase 3).
-        $sale = ['id' => 1, 'responsible_id' => self::ACTOR_ID, 'status' => 'BORRADOR'];
-
         foreach ([Role::ADMINISTRADOR, Role::LIDER_PROYECTO, Role::COLABORADOR, null] as $role) {
-            $authorizer = self::authorizer($role);
-
-            $this->assertFalse($authorizer->canManageSale($sale), (string) $role);
+            $policy = self::authorizer($role);
+            foreach (['7', 7, '99', null, '7abc'] as $responsible) {
+                foreach (['BORRADOR', 'EMITIDA', 'CANCELADA'] as $status) {
+                    foreach (['ORDINARIA', 'RESERVA'] as $type) {
+                        $sale = ['id' => 1, 'responsible_id' => $responsible, 'status' => $status, 'type' => $type];
+                        $visible = $role === Role::ADMINISTRADOR
+                            || ($role !== null && in_array($responsible, [7, '7'], true));
+                        $editable = $visible && $status === 'BORRADOR' && $type === 'ORDINARIA';
+                        $this->assertSame($visible, $policy->canViewSale($sale));
+                        $this->assertSame($visible, $policy->canViewSaleFinance($sale));
+                        $this->assertSame($editable, $policy->canManageSale($sale));
+                        $this->assertSame($editable, $policy->canIssueSale($sale));
+                        $this->assertSame($role === Role::ADMINISTRADOR, $policy->canCancelSale($sale));
+                        $this->assertSame($visible && $status === 'EMITIDA', $policy->canRegisterSalePayment($sale));
+                    }
+                }
+            }
         }
+    }
 
+    public function test_D_project_payments_require_billable_owned_finance_not_membership_or_registrant(): void
+    {
+        // §11: FINALIZADO aún puede tener saldo; CANCELADO no recibe nuevos pagos.
+        foreach ([Role::ADMINISTRADOR, Role::LIDER_PROYECTO, Role::COLABORADOR, null] as $role) {
+            $policy = self::authorizer($role);
+            foreach ([7, '7', 99, null, true, '7abc'] as $leader) {
+                foreach ([true, 1, '1', false, 0, '0', 'true', 1.0, null] as $billable) {
+                    foreach (['BORRADOR', 'PLANIFICADO', 'EN_CURSO', 'PAUSADO', 'FINALIZADO', 'CANCELADO'] as $status) {
+                        $project = ['leader_id' => $leader, 'billable' => $billable, 'status' => $status,
+                            'is_member' => true, 'registered_by' => 7];
+                        $finance = $role === Role::ADMINISTRADOR
+                            || ($role === Role::LIDER_PROYECTO && in_array($leader, [7, '7'], true));
+                        $this->assertSame(
+                            $finance && in_array($billable, [true, 1, '1'], true) && $status !== 'CANCELADO',
+                            $policy->canRegisterProjectPayment($project)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    public function test_D_null_inactive_missing_identity_and_malformed_ids_deny_sale_and_project_payments(): void
+    {
+        $sale = ['responsible_id' => '7', 'status' => 'EMITIDA', 'type' => 'ORDINARIA'];
+        $project = ['leader_id' => '7', 'billable' => 1, 'status' => 'FINALIZADO'];
+        $saleMethods = ['canViewSale', 'canViewSaleFinance', 'canManageSale', 'canIssueSale', 'canCancelSale', 'canRegisterSalePayment'];
+        $contexts = [self::authorizer(null)];
+        foreach ([0, false, '0', null] as $active) {
+            $context = new AuthContext();
+            $context->setUser(['id' => '7', 'active' => $active, 'role_code' => Role::ADMINISTRADOR], AuthContext::METHOD_TOKEN);
+            $contexts[] = new Authorizer($context);
+        }
+        foreach ([null, true, 7.0, '07', '7abc'] as $id) {
+            $context = new AuthContext();
+            $context->setUser(['id' => $id, 'active' => 1, 'role_code' => Role::ADMINISTRADOR], AuthContext::METHOD_SESSION);
+            $contexts[] = new Authorizer($context);
+        }
+        foreach ($contexts as $policy) {
+            foreach ($saleMethods as $method) {
+                $this->assertFalse($policy->$method($sale));
+            }
+            $this->assertFalse($policy->canRegisterProjectPayment($project));
+        }
         $admin = self::authorizer(Role::ADMINISTRADOR);
-        $this->assertFalse($admin->canViewProject(null));
-        $this->assertFalse($admin->canManageSale(null));
+        foreach ($saleMethods as $method) {
+            $this->assertFalse($admin->$method(null));
+        }
+        $this->assertFalse($admin->canRegisterProjectPayment(null));
+        $this->assertFalse($admin->canRegisterProjectPayment(['billable' => 1]));
+        $this->assertFalse($admin->canManageSale(['status' => 'BORRADOR']));
+        $this->assertFalse($admin->canRegisterSalePayment(array_replace($sale, ['type' => 'UNKNOWN'])));
+        $owner = self::authorizer(Role::COLABORADOR);
+        foreach ([true, 7.0, '07', '7abc', '9223372036854775808'] as $id) {
+            $this->assertFalse($owner->canViewSale(array_replace($sale, ['responsible_id' => $id])));
+        }
+        // BIGINT nunca se trunca a PHP_INT_MAX al comparar responsabilidades.
+        $context = new AuthContext();
+        $context->setUser(['id' => '9223372036854775808', 'active' => 1, 'role_code' => Role::COLABORADOR], AuthContext::METHOD_TOKEN);
+        $big = new Authorizer($context);
+        $this->assertTrue($big->canViewSale(array_replace($sale, ['responsible_id' => '9223372036854775808'])));
+        $this->assertFalse($big->canViewSale(array_replace($sale, ['responsible_id' => '9223372036854775809'])));
     }
 
     public function test_B_project_visibility_and_finance_require_the_correct_relationship(): void

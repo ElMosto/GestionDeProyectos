@@ -16,6 +16,9 @@ permissions:
     resource: "tests/Unit/Policies/**"
     effect: allow
   - action: edit
+    resource: ".opencode/skills/permisos-rbac/references/matriz-permisos.md"
+    effect: allow
+  - action: edit
     resource: "src/Core/middleware.php"
     effect: allow
   - action: edit

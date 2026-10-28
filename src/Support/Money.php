@@ -42,4 +42,14 @@ final class Money
         }
         return bcadd($value, '0', 2);
     }
+
+    /** §10: no redondear extras intermedios; cantidades3 × precio2 × cantidad3 = escala8. */
+    public static function saleLineTotal(string $quantity, string $unitPrice, array $extras): string
+    {
+        $perUnit = bcadd($unitPrice, '0', 5);
+        foreach ($extras as $extra) {
+            $perUnit = bcadd($perUnit, bcmul($extra['quantity_per_unit'], $extra['unit_price'], 5), 5);
+        }
+        return self::amount(self::round(bcmul($quantity, $perUnit, 8)));
+    }
 }

@@ -1,13 +1,14 @@
 openapi: 3.1.0
 info:
   title: Gestión de Proyectos — Estudio Musical
-  version: 0.4.0
+  version: 0.5.0
   description: |
     API del sistema de gestión del estudio musical.
 
-    Estado: fases 1-2. Autenticación, perfil, usuarios, clientes, proyectos,
-    etapas, membresías, tareas, cargos y agenda propia de tareas.
-    Ventas, escritura de pagos, reservas y reuniones se añaden en fases posteriores.
+    Estado: fases 1-3. Autenticación, perfil, usuarios, clientes, proyectos,
+    etapas, membresías, tareas, cargos, agenda propia de tareas, catálogos,
+    ventas, pagos, anulaciones, reembolsos y ticket de venta.
+    Reservas, reuniones, dashboard y gastos quedan para fases posteriores.
 
     Convenciones vinculantes (ver `docs/api-movil.md`):
     - Importes y cantidades como **string** decimal.
@@ -49,6 +50,12 @@ tags:
     description: Tareas de proyecto, independientes y comentarios (§8)
   - name: agenda
     description: Proyección propia paginada de tareas; sin reuniones ni reservas en fase 2 (§13)
+  - name: catalogo
+    description: Productos y extras; lectura autenticada, gestión solo ADMIN (§10)
+  - name: ventas
+    description: Ventas propias o todas para ADMIN; snapshots al emitir (§10)
+  - name: pagos
+    description: Ledger único de ventas y proyectos; anulación y reembolso solo ADMIN (§11)
 
 paths:
   /auth/csrf:
@@ -1323,10 +1330,10 @@ paths:
     get:
       tags: [proyectos]
       operationId: listProjectPayments
-      summary: Historial de pagos, solo lectura en fase 2
+      summary: Historial de pagos de proyecto
       description: |
         Solo ADMIN/líder dueño. meta.summary contiene resumen financiero calculado.
-        No existe POST de pagos de proyecto en fase 2. Sin importes en 403/404;
+        Conserva la respuesta de fase 2. Sin importes en 403/404;
         no se confunde valor interno estimado con ingreso ni cuenta por cobrar.
       parameters:
         - $ref: '#/components/parameters/ProjectResourceId'
@@ -1337,6 +1344,32 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/ProjectForbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [pagos]
+      operationId: registerProjectPayment
+      summary: Registrar abono de proyecto cobrable
+      description: |
+        Solo ADMIN o líder propietario con permiso financiero; membresía no basta.
+        Exige proyecto cobrable, no CANCELADO y cliente activo. FINALIZADO permite
+        cobrar saldo. Bloquea documento y ledger, rechaza sobrepago e incrementa versión.
+        La versión es opcional; si se aporta debe coincidir con el documento actual.
+      parameters:
+        - $ref: '#/components/parameters/ProjectResourceId'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/FinanceIdempotencyKey'
+        - $ref: '#/components/parameters/PaymentIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PaymentCreate'}
+      responses:
+        '201': {$ref: '#/components/responses/PaymentMutation'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
   /agenda:
     get:
@@ -1366,6 +1399,534 @@ paths:
         '403': {$ref: '#/components/responses/ProjectForbidden'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
 
+  /products:
+    get:
+      tags: [catalogo]
+      operationId: listProducts
+      summary: Listar productos y servicios
+      description: |
+        Solo activos para no ADMIN, incluso si envía active=0. ADMIN puede consultar
+        inactivos. Filtros permitidos limit, offset, q, active y type; orden nombre/id.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/CatalogSearch'
+        - $ref: '#/components/parameters/CatalogActive'
+        - name: type
+          in: query
+          schema: {type: string, enum: [PRODUCTO, SERVICIO]}
+      responses:
+        '200': {$ref: '#/components/responses/ProductPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [catalogo]
+      operationId: createProduct
+      summary: Crear producto o servicio (ADMIN)
+      description: No exige Idempotency-Key. No descuenta inventario ni registra dinero.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProductCreate'}
+            example: {name: Grabación, type: SERVICIO, unit: hora, price: '500.00', active: true}
+      responses:
+        '201': {$ref: '#/components/responses/ProductResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /products/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [catalogo]
+      operationId: getProduct
+      summary: Consultar producto y extras vinculados
+      description: No ADMIN recibe solo producto activo y extra_ids de extras activos.
+      responses:
+        '200': {$ref: '#/components/responses/ProductResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    patch:
+      tags: [catalogo]
+      operationId: updateProduct
+      summary: Editar producto (ADMIN)
+      description: |
+        Exige version/expected_version o If-Match coherentes. No exige Idempotency-Key.
+        Cambiar precio o nombre no altera snapshots de ventas emitidas.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProductUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/ProductResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /products/{id}/extras:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    put:
+      tags: [catalogo]
+      operationId: replaceProductExtras
+      summary: Reemplazar extras permitidos del producto (ADMIN)
+      description: |
+        Solo IDs de extras activos; lista vacía desvincula todos. Exige una fuente
+        de versión coherente; no exige Idempotency-Key. No altera ventas emitidas.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [extra_ids]
+              properties:
+                version: {$ref: '#/components/schemas/ProjectVersion'}
+                expected_version: {$ref: '#/components/schemas/ProjectVersion'}
+                extra_ids:
+                  type: array
+                  uniqueItems: true
+                  items: {$ref: '#/components/schemas/ProjectId'}
+            example: {version: '1', extra_ids: ['1', '2']}
+      responses:
+        '200': {$ref: '#/components/responses/ProductResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /extras:
+    get:
+      tags: [catalogo]
+      operationId: listExtras
+      summary: Listar extras de catálogo
+      description: Solo activos para no ADMIN; ADMIN incluye inactivos. Orden nombre/id.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/CatalogSearch'
+        - $ref: '#/components/parameters/CatalogActive'
+      responses:
+        '200': {$ref: '#/components/responses/ExtraPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [catalogo]
+      operationId: createExtra
+      summary: Crear extra de catálogo (ADMIN)
+      description: No exige Idempotency-Key; no registra dinero.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExtraCreate'}
+            example: {name: Edición adicional, price: '100.00', active: true}
+      responses:
+        '201': {$ref: '#/components/responses/ExtraResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /extras/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [catalogo]
+      operationId: getExtra
+      summary: Consultar extra de catálogo
+      description: Un extra inactivo no es visible para no ADMIN.
+      responses:
+        '200': {$ref: '#/components/responses/ExtraResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    patch:
+      tags: [catalogo]
+      operationId: updateExtra
+      summary: Editar extra (ADMIN)
+      description: |
+        Exige version/expected_version o If-Match coherentes, no Idempotency-Key.
+        Las ventas emitidas mantienen su snapshot histórico.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExtraUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/ExtraResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /sales:
+    get:
+      tags: [ventas]
+      operationId: listSales
+      summary: Listar ventas propias o todas para ADMIN
+      description: |
+        Orden id descendente. Lista solo campos escalares; sin items ni
+        financial_summary. Los totales de borradores reflejan el catálogo vigente.
+        Filtros con lista blanca; responsible_id solo para ADMIN, sin ampliar
+        acceso por ID para otros roles. Mismo recorte con cookie o Bearer.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: q
+          in: query
+          description: Búsqueda por folio.
+          schema: {type: string, maxLength: 120}
+        - name: status
+          in: query
+          schema: {type: string, enum: [BORRADOR, EMITIDA, CANCELADA]}
+        - name: type
+          in: query
+          schema: {type: string, enum: [ORDINARIA, RESERVA]}
+        - name: client_id
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectId'}
+        - name: responsible_id
+          in: query
+          description: Solo ADMIN; no concede acceso por objeto.
+          schema: {$ref: '#/components/schemas/ProjectId'}
+        - name: from
+          in: query
+          description: Inicio inclusivo de fecha de emisión UTC.
+          schema: {type: string, format: date}
+        - name: to
+          in: query
+          description: Fin inclusivo de fecha de emisión UTC.
+          schema: {type: string, format: date}
+      responses:
+        '200': {$ref: '#/components/responses/SalePage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [ventas]
+      operationId: createSale
+      summary: Crear borrador de venta ordinaria
+      description: |
+        Cualquier usuario activo crea venta propia; responsable es el actor actual.
+        No admite responsible_id, currency, total ni precios de catálogo enviados
+        por el cliente. type opcional solo ORDINARIA; RESERVA se coordina en fase 4.
+        Puede crear borrador sin partidas; emitir exige al menos una.
+        Concepto libre solo ADMIN; infracción produce 403 FORBIDDEN.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/FinanceIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaleCreate'}
+            example:
+              client_id: '1'
+              items:
+                - product_id: '1'
+                  quantity: '2.000'
+                  extras: [{extra_id: '1', quantity_per_unit: '1.000'}]
+      responses:
+        '201': {$ref: '#/components/responses/SaleResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /sales/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [ventas]
+      operationId: getSale
+      summary: Consultar venta con partidas y resumen financiero
+      description: |
+        Solo responsable actual o ADMIN. BORRADOR recalcula con catálogo vigente
+        sin escribir; EMITIDA/CANCELADA conserva snapshots. No expone finanzas
+        ajenas ni en errores, también con token móvil.
+      responses:
+        '200': {$ref: '#/components/responses/SaleResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    patch:
+      tags: [ventas]
+      operationId: updateSale
+      summary: Editar borrador propio o de cualquier responsable para ADMIN
+      description: |
+        Solo client_id, notes e items; items reemplaza todas las partidas y exige
+        Idempotency-Key. Sin items no exige clave. Siempre exige una versión
+        coherente (cuerpo o If-Match). EMITIDA/CANCELADA da SALE_NOT_DRAFT.
+        RESERVA no se edita por esta ruta (RESERVATION_MANAGED).
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+        - $ref: '#/components/parameters/SaleEditIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaleUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/SaleResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /sales/{id}/issue:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    post:
+      tags: [ventas]
+      operationId: issueSale
+      summary: Emitir y congelar snapshots de venta ordinaria
+      description: |
+        Responsable o ADMIN. Exige borrador no vacío y una fuente de versión.
+        Recalcula catálogo bajo lock, congela nombres/precios e issued_at.
+        Redondeo half-up por partida al final; emisión nunca registra cobro.
+        No admite mutar venta RESERVA por esta ruta.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+        - $ref: '#/components/parameters/FinanceIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FinanceVersionInput'}
+            example: {version: '2'}
+      responses:
+        '200': {$ref: '#/components/responses/SaleResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /sales/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    post:
+      tags: [ventas]
+      operationId: cancelSale
+      summary: Cancelar venta ordinaria (ADMIN)
+      description: |
+        D-18: motivo obligatorio, versión coherente y neto pagado cero.
+        Neto positivo da PAYMENTS_REQUIRE_RESOLUTION; resolver ledger antes.
+        No crea penalización, pago ni reembolso automático; conserva historial.
+        RESERVA da RESERVATION_MANAGED y exige coordinación de fase 4.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+        - $ref: '#/components/parameters/FinanceIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaleCancel'}
+            example: {version: '3', reason: Solicitud del cliente}
+      responses:
+        '200': {$ref: '#/components/responses/SaleResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /sales/{id}/payments:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [pagos]
+      operationId: listSalePayments
+      summary: Historial paginado de pagos de venta
+      description: |
+        Responsable actual o ADMIN, no por registrador. Incluye anulados;
+        nunca expone clave idempotente ni su hash. No hay ruta paralela de cobro
+        para reservas; sus cobros usan exclusivamente la venta vinculada.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/PaymentPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [pagos]
+      operationId: registerSalePayment
+      summary: Registrar abono de venta emitida
+      description: |
+        Solo responsable actual o ADMIN; venta EMITIDA. Bajo transacción bloquea
+        documento, calcula saldo y rechaza sobrepago. Incrementa versión de venta.
+        Versión opcional del documento, nunca permite editar totales desde pagos.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/FinanceIdempotencyKey'
+        - $ref: '#/components/parameters/PaymentIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PaymentCreate'}
+            example: {amount: '100.00', method: EFECTIVO, effective_at: '2026-10-28T12:00:00-06:00'}
+      responses:
+        '201': {$ref: '#/components/responses/PaymentMutation'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /sales/{id}/mark-paid:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    post:
+      tags: [pagos]
+      operationId: markSalePaid
+      summary: Registrar exactamente el saldo pendiente de venta
+      description: |
+        Responsable actual o ADMIN, venta EMITIDA. Atajo del ledger bajo el mismo
+        bloqueo que los abonos; no admite amount ni estado de pago manual.
+        Saldo cero devuelve payment=null sin asiento ficticio; total cero muestra
+        SIN_CARGO. La versión del documento es opcional.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/FinanceIdempotencyKey'
+        - $ref: '#/components/parameters/PaymentIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MarkPaidInput'}
+      responses:
+        '200': {$ref: '#/components/responses/PaymentMutation'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /payments/{id}/void:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    post:
+      tags: [pagos]
+      operationId: voidPayment
+      summary: Anular pago erróneo con motivo (ADMIN)
+      description: |
+        No es reembolso real. Conserva asiento y auditoría; incrementa versión del
+        documento. PAYMENT_HAS_REFUNDS impide anular con reembolsos efectivos;
+        PAYMENT_VOIDED indica pago ya anulado. Versión opcional del documento origen.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/FinanceIdempotencyKey'
+        - $ref: '#/components/parameters/PaymentIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PaymentVoidInput'}
+      responses:
+        '200': {$ref: '#/components/responses/PaymentMutation'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /payments/{id}/refunds:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [pagos]
+      operationId: listPaymentRefunds
+      summary: Historial paginado de reembolsos del pago
+      description: |
+        Mismo permiso financiero sobre el documento actual que el historial de
+        pagos (ADMIN/responsable de venta o ADMIN/líder dueño de proyecto).
+        Incluye historial sin exponer claves ni hashes idempotentes.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200': {$ref: '#/components/responses/RefundPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [pagos]
+      operationId: refundPayment
+      summary: Registrar devolución real vinculada al pago (ADMIN)
+      description: |
+        Motivo e importe positivo obligatorios. Límite = pago menos reembolsos
+        efectivos. No admite pago anulado, no anula venta ni aplica tasas.
+        Incrementa versión del documento; versión esperada opcional del origen.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/FinanceIdempotencyKey'
+        - $ref: '#/components/parameters/PaymentIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RefundCreate'}
+            example: {amount: '50.00', effective_at: '2026-10-28T18:00:00Z', reason: Devolución acordada}
+      responses:
+        '201': {$ref: '#/components/responses/PaymentMutation'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/FinanceConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /sales/{id}/ticket:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [ventas]
+      operationId: getSaleTicket
+      summary: Vista HTML privada de impresión de venta
+      description: |
+        Excepción HTML al contrato JSON, sin scraping para móvil. Solo responsable
+        actual o ADMIN, con cookie o Bearer; GET no exige CSRF. Usa datos autorizados
+        de SaleService::ticketData y escapa HTML. CSS/script locales de impresión.
+        Reimprimir no emite ni modifica dinero, aun cuando audita SALE_TICKET_VIEW.
+        Comprobante interno MXN, no factura fiscal. paper inválido da 422 JSON.
+      parameters:
+        - name: paper
+          in: query
+          schema: {type: string, enum: [80mm, A4], default: 80mm}
+      responses:
+        '200':
+          description: HTML de impresión (80 mm o A4); no es un DTO JSON.
+          content:
+            text/html:
+              schema: {type: string}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
 components:
   securitySchemes:
     cookieAuth:
@@ -1379,6 +1940,331 @@ components:
       description: Token opaco de dispositivo (Android). Sin JWT.
 
   schemas:
+    FinanceVersionInput:
+      type: object
+      additionalProperties: false
+      description: |
+        Para catálogo/ventas se exige al menos version, expected_version o If-Match.
+        En pagos las tres fuentes son opcionales. Si se aportan varias deben coincidir.
+      properties:
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        expected_version: {$ref: '#/components/schemas/ProjectVersion'}
+    FinanceVersionFields:
+      type: object
+      properties:
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        expected_version: {$ref: '#/components/schemas/ProjectVersion'}
+    FinanceTimestamp:
+      type: string
+      format: date-time
+      description: ISO 8601 con segundos y zona; salida normalizada a UTC Z.
+      pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$'
+      examples: ['2026-10-28T18:00:00Z']
+    FinanceNullableId:
+      oneOf:
+        - $ref: '#/components/schemas/ProjectId'
+        - type: 'null'
+    FinanceNullableTimestamp:
+      oneOf:
+        - $ref: '#/components/schemas/FinanceTimestamp'
+        - type: 'null'
+    ProductFields:
+      type: object
+      properties:
+        sku: {type: [string, 'null'], minLength: 1, maxLength: 40}
+        name: {type: string, minLength: 1, maxLength: 160}
+        description: {type: [string, 'null'], maxLength: 10000}
+        type: {type: string, enum: [PRODUCTO, SERVICIO]}
+        unit: {type: string, minLength: 1, maxLength: 32}
+        price: {$ref: '#/components/schemas/ProjectMoney'}
+        active: {type: boolean}
+    ProductCreate:
+      allOf:
+        - $ref: '#/components/schemas/ProductFields'
+      required: [name, price]
+      unevaluatedProperties: false
+    ProductUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ProductFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+      unevaluatedProperties: false
+    Product:
+      allOf:
+        - $ref: '#/components/schemas/ProductFields'
+        - type: object
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            version: {$ref: '#/components/schemas/ProjectVersion'}
+            created_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            updated_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            extra_ids:
+              type: array
+              description: Presente en detalle; para no ADMIN solo extras activos.
+              items: {$ref: '#/components/schemas/ProjectId'}
+    ExtraFields:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        price: {$ref: '#/components/schemas/ProjectMoney'}
+        active: {type: boolean}
+    ExtraCreate:
+      allOf:
+        - $ref: '#/components/schemas/ExtraFields'
+      required: [name, price]
+      unevaluatedProperties: false
+    ExtraUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ExtraFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+      unevaluatedProperties: false
+    Extra:
+      allOf:
+        - $ref: '#/components/schemas/ExtraFields'
+        - type: object
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            version: {$ref: '#/components/schemas/ProjectVersion'}
+            created_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            updated_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+    SaleExtraInput:
+      type: object
+      additionalProperties: false
+      required: [extra_id, quantity_per_unit]
+      properties:
+        extra_id: {$ref: '#/components/schemas/ProjectId'}
+        quantity_per_unit: {$ref: '#/components/schemas/ProjectQuantity'}
+    SaleCatalogItemInput:
+      type: object
+      additionalProperties: false
+      required: [product_id, quantity]
+      description: |
+        Producto y extras activos del catálogo; extras deben estar vinculados al
+        producto y no repetirse. El servidor calcula nombre y precios.
+      properties:
+        product_id: {$ref: '#/components/schemas/ProjectId'}
+        quantity: {$ref: '#/components/schemas/ProjectQuantity'}
+        extras:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/SaleExtraInput'}
+    SaleFreeItemInput:
+      type: object
+      additionalProperties: false
+      required: [product_id, name, unit_price, quantity]
+      description: Solo ADMIN. product_id debe ser null; no admite extras libres ni de catálogo.
+      properties:
+        product_id: {type: 'null'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        unit_price: {$ref: '#/components/schemas/ProjectMoney'}
+        quantity: {$ref: '#/components/schemas/ProjectQuantity'}
+        extras: {type: array, maxItems: 0, items: {}}
+    SaleFields:
+      type: object
+      properties:
+        client_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        notes: {type: [string, 'null'], maxLength: 10000}
+        items:
+          type: array
+          maxItems: 200
+          description: Reemplazo completo al editar; vacío permitido solo en borrador.
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/SaleCatalogItemInput'
+              - $ref: '#/components/schemas/SaleFreeItemInput'
+    SaleCreate:
+      allOf:
+        - $ref: '#/components/schemas/SaleFields'
+        - type: object
+          properties:
+            type: {type: string, enum: [ORDINARIA]}
+      unevaluatedProperties: false
+    SaleUpdate:
+      allOf:
+        - $ref: '#/components/schemas/SaleFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+      unevaluatedProperties: false
+    SaleCancel:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          required: [reason]
+          properties:
+            reason: {type: string, minLength: 1, maxLength: 255}
+      unevaluatedProperties: false
+    SaleExtraSnapshot:
+      type: object
+      properties:
+        id: {$ref: '#/components/schemas/FinanceNullableId'}
+        extra_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        name_snapshot: {type: string}
+        quantity_per_unit: {$ref: '#/components/schemas/ProjectQuantity'}
+        unit_price: {$ref: '#/components/schemas/ProjectMoney'}
+    SaleItem:
+      type: object
+      description: |
+        Importe = quantity × (unit_price + Σ quantity_per_unit × extra.unit_price).
+        Aritmética exacta, escala interna 8 y half-up a dos decimales por partida.
+      properties:
+        id: {$ref: '#/components/schemas/FinanceNullableId'}
+        product_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        name_snapshot: {type: string}
+        quantity: {$ref: '#/components/schemas/ProjectQuantity'}
+        unit_price: {$ref: '#/components/schemas/ProjectMoney'}
+        line_total: {$ref: '#/components/schemas/ProjectMoney'}
+        sort_order: {type: integer}
+        extras:
+          type: array
+          items: {$ref: '#/components/schemas/SaleExtraSnapshot'}
+    FinancialSummary:
+      type: object
+      description: |
+        Calculado solo en backend desde PaymentLedger. net_paid = pagos válidos
+        menos reembolsos efectivos. SIN_CARGO para total cero, sin pago ficticio.
+        No cobrable siempre tiene balance cero y no cuenta como ingreso real.
+      properties:
+        total: {$ref: '#/components/schemas/ProjectMoney'}
+        paid_amount: {$ref: '#/components/schemas/ProjectMoney'}
+        refunded_amount: {$ref: '#/components/schemas/ProjectMoney'}
+        net_paid: {$ref: '#/components/schemas/ProjectMoney'}
+        balance: {$ref: '#/components/schemas/ProjectMoney'}
+        payment_status: {type: string, enum: [NO_PAGADO, PARCIAL, PAGADO, SIN_CARGO]}
+        billable: {type: boolean}
+    SaleSummary:
+      type: object
+      description: Campos escalares de lista; importes visibles solo a responsable o ADMIN.
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        folio: {type: string}
+        type: {type: string, enum: [ORDINARIA, RESERVA]}
+        client_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        responsible_id: {$ref: '#/components/schemas/ProjectId'}
+        status: {type: string, enum: [BORRADOR, EMITIDA, CANCELADA]}
+        issued_at: {$ref: '#/components/schemas/FinanceNullableTimestamp'}
+        currency: {type: string, enum: [MXN]}
+        total: {$ref: '#/components/schemas/ProjectMoney'}
+        notes: {type: [string, 'null']}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        created_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+        updated_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+    Sale:
+      allOf:
+        - $ref: '#/components/schemas/SaleSummary'
+        - type: object
+          properties:
+            items:
+              type: array
+              items: {$ref: '#/components/schemas/SaleItem'}
+            financial_summary: {$ref: '#/components/schemas/FinancialSummary'}
+    PaymentMethod:
+      type: string
+      enum: [EFECTIVO, TRANSFERENCIA, TARJETA, OTRO]
+      description: Registro manual; nunca enviar números de tarjeta ni credenciales bancarias.
+    PaymentFields:
+      type: object
+      properties:
+        method: {$ref: '#/components/schemas/PaymentMethod'}
+        effective_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+        reference: {type: [string, 'null'], maxLength: 120}
+        notes: {type: [string, 'null'], maxLength: 10000}
+    PaymentCreate:
+      allOf:
+        - $ref: '#/components/schemas/PaymentFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          properties:
+            amount:
+              $ref: '#/components/schemas/ProjectMoney'
+              description: Importe estrictamente positivo, dos decimales; cero no válido.
+      required: [amount, effective_at, method]
+      unevaluatedProperties: false
+    MarkPaidInput:
+      allOf:
+        - $ref: '#/components/schemas/PaymentFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+      required: [effective_at, method]
+      unevaluatedProperties: false
+    PaymentVoidInput:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          properties:
+            reason: {type: string, minLength: 1, maxLength: 255}
+      required: [reason]
+      unevaluatedProperties: false
+    RefundCreate:
+      allOf:
+        - $ref: '#/components/schemas/FinanceVersionFields'
+        - type: object
+          properties:
+            amount:
+              $ref: '#/components/schemas/ProjectMoney'
+              description: Positivo y no mayor al importe aún no reembolsado.
+            effective_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            reason: {type: string, minLength: 1, maxLength: 255}
+      required: [amount, effective_at, reason]
+      unevaluatedProperties: false
+    Payment:
+      type: object
+      description: |
+        DTO por lista blanca; sin Idempotency-Key HTTP, clave almacenada ni hash.
+        Exactamente un project_id o sale_id es no nulo. Historial conserva anulados.
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        folio: {type: string}
+        project_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        sale_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        amount: {$ref: '#/components/schemas/ProjectMoney'}
+        effective_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+        method: {$ref: '#/components/schemas/PaymentMethod'}
+        reference: {type: [string, 'null']}
+        notes: {type: [string, 'null']}
+        status: {type: string, enum: [REGISTRADO, ANULADO]}
+        registered_by: {$ref: '#/components/schemas/ProjectId'}
+        voided_at: {$ref: '#/components/schemas/FinanceNullableTimestamp'}
+        voided_by: {$ref: '#/components/schemas/FinanceNullableId'}
+        void_reason: {type: [string, 'null']}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        created_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+        updated_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+    Refund:
+      type: object
+      description: |
+        Devolución real del pago original, sin clave ni hash idempotente.
+        No tiene medio/referencia separados; el medio pertenece al pago original.
+        No existe endpoint de anulación de reembolsos en fase 3.
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        folio: {type: string}
+        payment_id: {$ref: '#/components/schemas/ProjectId'}
+        amount: {$ref: '#/components/schemas/ProjectMoney'}
+        effective_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+        reason: {type: string}
+        status: {type: string, enum: [REGISTRADO, ANULADO]}
+        registered_by: {$ref: '#/components/schemas/ProjectId'}
+        voided_at: {$ref: '#/components/schemas/FinanceNullableTimestamp'}
+        voided_by: {$ref: '#/components/schemas/FinanceNullableId'}
+        version: {$ref: '#/components/schemas/ProjectVersion'}
+        created_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+        updated_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+    PaymentMutationResult:
+      type: object
+      properties:
+        payment:
+          oneOf:
+            - $ref: '#/components/schemas/Payment'
+            - type: 'null'
+        refund:
+          oneOf:
+            - $ref: '#/components/schemas/Refund'
+            - type: 'null'
+        document:
+          type: object
+          description: Documento origen y su versión posterior al movimiento.
+          properties:
+            kind: {type: string, enum: [sale, project]}
+            id: {$ref: '#/components/schemas/ProjectId'}
+            version: {$ref: '#/components/schemas/ProjectVersion'}
+        financial_summary: {$ref: '#/components/schemas/FinancialSummary'}
     ProjectId:
       type: string
       pattern: '^[1-9][0-9]{0,18}$'
@@ -2101,6 +2987,48 @@ components:
                 $ref: '#/components/schemas/DuplicateWarning'
 
   parameters:
+    CatalogSearch:
+      name: q
+      in: query
+      description: Búsqueda por nombre; no permite SQL ni orden arbitrario.
+      schema: {type: string, maxLength: 120}
+    CatalogActive:
+      name: active
+      in: query
+      description: Solo ADMIN puede incluir inactivos; otros siempre consultan activos.
+      schema: {type: string, enum: ['0', '1']}
+    FinanceIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Clave HTTP original ASCII imprimible sin espacios, 1–100 caracteres.
+        Alcance actor+operación; hash de petición canónica con ruta, cuerpo y versión
+        cuando corresponda. Misma clave y contenido devuelve resultado original;
+        distinto contenido da 409 IDEMPOTENCY_KEY_REUSED. Solicitud, efecto y respuesta
+        comparten transacción. Replay exige autorización actual sobre el objeto,
+        también con Bearer. Nunca se devuelve la clave ni el hash privado del ledger.
+      schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[!-~]+$'}
+      example: venta-20261028-001
+    SaleEditIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Obligatoria en PATCH de venta con items (incluso lista vacía); no exigida
+        al cambiar solo notes/client_id. Mismas reglas transaccionales, de replay
+        y reautorización que FinanceIdempotencyKey.
+      schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[!-~]+$'}
+    PaymentIfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        Versión opcional del documento origen (venta/proyecto), no del pago.
+        Alternativa a version/expected_version del cuerpo. Si se envían varias
+        fuentes deben coincidir; formato/desacuerdo 422, obsoleta 409 VERSION_CONFLICT.
+      schema: {type: string, pattern: '^"[1-9][0-9]*"$'}
+      example: '"3"'
     ProjectResourceId:
       name: id
       in: path
@@ -2207,6 +3135,123 @@ components:
         pattern: '^[0-9]+$'
 
   responses:
+    ProductResource:
+      description: Producto autorizado con extra_ids; precio como string y active boolean.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Product'}
+    ProductPage:
+      description: Productos autorizados paginados; sin extra_ids de detalle.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data:
+                type: array
+                items: {$ref: '#/components/schemas/Product'}
+              meta: {$ref: '#/components/schemas/ProjectPaginationMeta'}
+    ExtraResource:
+      description: Extra de catálogo autorizado.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Extra'}
+    ExtraPage:
+      description: Extras autorizados paginados.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data:
+                type: array
+                items: {$ref: '#/components/schemas/Extra'}
+              meta: {$ref: '#/components/schemas/ProjectPaginationMeta'}
+    SaleResource:
+      description: Venta propia o autorizada para ADMIN con partidas y resumen del ledger.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Sale'}
+    SalePage:
+      description: Ventas autorizadas, solo escalares; borradores con total vigente.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data:
+                type: array
+                items: {$ref: '#/components/schemas/SaleSummary'}
+              meta: {$ref: '#/components/schemas/ProjectPaginationMeta'}
+    PaymentPage:
+      description: Historial financiero autorizado de venta, incluidos pagos anulados.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data:
+                type: array
+                items: {$ref: '#/components/schemas/Payment'}
+              meta: {$ref: '#/components/schemas/ProjectPaginationMeta'}
+    RefundPage:
+      description: Historial paginado autorizado de reembolsos del pago.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data:
+                type: array
+                items: {$ref: '#/components/schemas/Refund'}
+              meta: {$ref: '#/components/schemas/ProjectPaginationMeta'}
+    PaymentMutation:
+      description: |
+        Movimiento registrado y resumen actual; versión del documento actualizada.
+        mark-paid con saldo cero devuelve payment=null sin insertar asiento ficticio.
+        Replay devuelve el resultado original únicamente tras reautorizar acceso actual.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/PaymentMutationResult'}
+    FinanceConflict:
+      description: |
+        code estable según la regla, nunca ramificar por message:
+        VERSION_CONFLICT (versión obsoleta), IDEMPOTENCY_KEY_REUSED (otra petición
+        con la misma clave), SKU_CONFLICT (SKU duplicado), SALE_NOT_DRAFT
+        (venta inmutable), SALE_CANCELLED (ya cancelada), RESERVATION_MANAGED
+        (gestión coordinada desde reserva), PAYMENTS_REQUIRE_RESOLUTION (neto
+        cobrado impide cancelar), CLIENT_INACTIVE (cobro de proyecto sin cliente
+        activo), OVERPAYMENT (importe supera saldo), PAYMENT_VOIDED (pago anulado),
+        PAYMENT_HAS_REFUNDS (anulación con reembolsos activos), REFUND_EXCEEDS_PAYMENT
+        (supera remanente reembolsable), PAYMENT_DOCUMENT_CHANGED (origen cambió;
+        reintentar). No incluye importes ni datos financieros de objetos ajenos.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example:
+            error: {code: OVERPAYMENT, message: El pago supera el saldo pendiente., fields: {}}
+            request_id: 1234567890abcdef
     ProjectResource:
       description: Proyecto con versión actual y campos financieros recortados según solicitante.
       content:
