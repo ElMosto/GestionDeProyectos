@@ -207,7 +207,6 @@ function renderChrome() {
         { path: '/gastos', label: 'Gastos', capability: 'expenses.manage' },
         { path: '/auditoria', label: 'Auditoría', capability: 'audit.view' },
         { path: '/configuracion', label: 'Configuración', capability: 'settings.manage' },
-        { path: '/mi-usuario', label: 'Mi usuario' },
     ].filter((item) => item.allowed !== false && (!item.capability || session.capabilities[item.capability] === true));
 
     navRoot.append(el('ul', { class: 'nav-list' }, items.map((item) => el(
@@ -224,7 +223,12 @@ function renderChrome() {
     const roleCode = user.role && typeof user.role.code === 'string' ? user.role.code : '';
 
     sessionRoot.append(
-        el('div', { class: 'session-identity' }, [
+        el('button', {
+            type: 'button',
+            class: 'session-identity session-identity-button',
+            'aria-label': `Abrir mi usuario: ${user.name}`,
+            onClick: () => { navigate('/mi-usuario'); },
+        }, [
             userAvatar(user, { small: true, alt: '' }),
             el('span', { class: 'session-text' }, [
                 el('span', { class: 'session-name', text: user.name }),

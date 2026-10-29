@@ -234,11 +234,31 @@ a:hover {
     flex-wrap: wrap;
 }
 
-.session-identity {
+.session-identity,
+.session-identity-button {
     display: inline-flex;
     align-items: center;
     gap: 10px;
     min-height: var(--tap-target);
+}
+
+.session-identity-button {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+    text-align: left;
+    border-radius: var(--radius-md, 8px);
+}
+
+.session-identity-button:hover .session-name {
+    text-decoration: underline;
+}
+
+.session-identity-button:focus-visible {
+    outline: 2px solid var(--header-text, #fff);
+    outline-offset: 2px;
 }
 
 .session-text {
