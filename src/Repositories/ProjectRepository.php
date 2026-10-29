@@ -21,8 +21,8 @@ final class ProjectRepository extends ProjectStorage
         if ($lock && $this->one('SELECT id FROM projects WHERE id=? FOR UPDATE', [$id]) === null) {
             return null;
         }
-        $row = $this->one('SELECT p.*, EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=?) is_member'
-            . self::COUNTS . ' FROM projects p WHERE p.id=?', [$actorId, $id]);
+        $row = $this->one('SELECT p.*, c.name AS client_name, u.name AS leader_name, EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=?) is_member'
+            . self::COUNTS . ' FROM projects p LEFT JOIN clients c ON c.id=p.client_id LEFT JOIN users u ON u.id=p.leader_id WHERE p.id=?', [$actorId, $id]);
         if ($row !== null) {
             $row['is_member'] = (bool) $row['is_member'];
         }
@@ -42,7 +42,7 @@ final class ProjectRepository extends ProjectStorage
             $where .= ' AND (p.name LIKE ? OR p.folio LIKE ?)';
             array_push($params, '%' . $q['q'] . '%', '%' . $q['q'] . '%');
         }
-        $page = $this->page('p.*' . self::COUNTS, 'FROM projects p', $where, $params, 'p.id DESC', $q);
+        $page = $this->page('p.*, c.name AS client_name, u.name AS leader_name' . self::COUNTS, 'FROM projects p LEFT JOIN clients c ON c.id=p.client_id LEFT JOIN users u ON u.id=p.leader_id', $where, $params, 'p.id DESC', $q);
         return $page;
     }
 

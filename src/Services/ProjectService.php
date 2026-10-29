@@ -307,6 +307,8 @@ final class ProjectService
             $out[$key] = $p[$key] === null ? null : (string) $p[$key];
         }
         $out['billable'] = (bool) $p['billable'];
+        $out['client_name'] = $p['client_name'] ?? null;
+        $out['leader_name'] = $p['leader_name'] ?? null;
         $out += self::progress($p);
         $out['created_at'] = UserPresenter::iso($p['created_at']);
         $out['updated_at'] = UserPresenter::iso($p['updated_at']);

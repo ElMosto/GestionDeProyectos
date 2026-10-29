@@ -210,6 +210,8 @@ final class SaleService
         foreach (['id', 'folio', 'type', 'client_id', 'responsible_id', 'status', 'currency', 'total', 'notes', 'version'] as $key) {
             $out[$key] = $sale[$key] === null ? null : (string) $sale[$key];
         }
+        $out['client_name'] = $sale['client_name'] ?? null;
+        $out['responsible_name'] = $sale['responsible_name'] ?? null;
         foreach (['issued_at', 'created_at', 'updated_at'] as $key) {
             $out[$key] = UserPresenter::iso($sale[$key]);
         }

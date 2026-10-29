@@ -8,7 +8,13 @@ final class SaleRepository extends ProjectStorage
 {
     public function find(int $id, bool $lock = false): ?array
     {
-        return $this->one('SELECT * FROM sales WHERE id=?' . ($lock ? ' FOR UPDATE' : ''), [$id]);
+        $sql = 'SELECT s.*, c.name AS client_name, u.name AS responsible_name'
+            . ' FROM sales s LEFT JOIN clients c ON c.id=s.client_id'
+            . ' LEFT JOIN users u ON u.id=s.responsible_id WHERE s.id=?';
+        if ($lock) {
+            $sql .= ' FOR UPDATE';
+        }
+        return $this->one($sql, [$id]);
     }
 
     public function paginate(array $q, int $actor, bool $admin): array
@@ -16,28 +22,30 @@ final class SaleRepository extends ProjectStorage
         $where = ['1=1'];
         $params = [];
         if (!$admin) {
-            $where[] = 'responsible_id=?';
+            $where[] = 's.responsible_id=?';
             $params[] = $actor;
         }
         foreach (['status', 'type', 'client_id', 'responsible_id'] as $key) {
             if (isset($q[$key])) {
-                $where[] = $key . '=?';
+                $where[] = 's.' . $key . '=?';
                 $params[] = $q[$key];
             }
         }
         if (isset($q['q'])) {
-            $where[] = 'folio LIKE ?';
+            $where[] = 's.folio LIKE ?';
             $params[] = '%' . $q['q'] . '%';
         }
         if (isset($q['from'])) {
-            $where[] = 'issued_at>=?';
+            $where[] = 's.issued_at>=?';
             $params[] = $q['from'] . ' 00:00:00';
         }
         if (isset($q['to'])) {
-            $where[] = 'issued_at<DATE_ADD(?, INTERVAL 1 DAY)';
+            $where[] = 's.issued_at<DATE_ADD(?, INTERVAL 1 DAY)';
             $params[] = $q['to'] . ' 00:00:00';
         }
-        return $this->page('*', 'FROM sales', implode(' AND ', $where), $params, 'id DESC', $q);
+        return $this->page('s.*, c.name AS client_name, u.name AS responsible_name',
+            'FROM sales s LEFT JOIN clients c ON c.id=s.client_id LEFT JOIN users u ON u.id=s.responsible_id',
+            implode(' AND ', $where), $params, 's.id DESC', $q);
     }
 
     public function create(array $data): int
