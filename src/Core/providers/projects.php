@@ -14,6 +14,7 @@ use App\Policies\Authorizer;
 use App\Repositories\ProjectChargeRepository;
 use App\Repositories\ProjectIdempotencyRepository;
 use App\Repositories\ProjectRepository;
+use App\Repositories\CommercialHistoryRepository;
 use App\Repositories\SequenceRepository;
 use App\Repositories\StageRepository;
 use App\Repositories\TaskRepository;
@@ -31,7 +32,7 @@ return static function (Container $container, string $root): void {
         $container->singleton($class, static fn (Container $c): object => new $class($c->get(Database::class)));
     }
     $container->singleton(ProjectAudit::class, static fn (Container $c): ProjectAudit => new ProjectAudit(
-        $c->get(AuditLogRepository::class), $c->get(AuditLogger::class), $c->get(Authorizer::class),
+        $c->get(AuditLogRepository::class), $c->get(AuditLogger::class), $c->get(Authorizer::class), $c->get(CommercialHistoryRepository::class),
     ));
     $container->singleton(ProjectIdempotency::class, static fn (Container $c): ProjectIdempotency => new ProjectIdempotency(
         $c->get(Database::class), $c->get(Authorizer::class), $c->get(ProjectIdempotencyRepository::class),

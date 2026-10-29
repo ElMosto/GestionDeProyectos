@@ -487,3 +487,34 @@ export async function api(path, options = {}) {
 
     return send(false);
 }
+
+/** Descarga XLSX dentro del cliente único; los errores JSON no se guardan como archivos. */
+export async function downloadFile(path) {
+    if (!/^\/projects\/[1-9]\d*\/gantt\.xlsx(?:\?[^#]*)?$/.test(path)) {
+        throw new Error('Ruta de exportación no válida.');
+    }
+    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const response = await fetch(`${API_BASE}${path}`, {
+        method: 'GET', credentials: 'same-origin', cache: 'no-store', headers: { Accept: mime },
+    });
+    if (!response.ok) {
+        const error = new ApiError(response.status, await readJson(response), response.headers.get('x-request-id'));
+        if (error.status === 401 && unauthorizedHandler) unauthorizedHandler(error);
+        throw error;
+    }
+    if (response.headers.get('content-type')?.split(';')[0] !== mime) {
+        throw new ApiError(response.status, { error: { code: 'INVALID_EXPORT', message: 'El servidor no devolvió un archivo XLSX. No se descargó contenido inesperado.' } });
+    }
+    const match = response.headers.get('content-disposition')?.match(/filename="([A-Za-z0-9_.-]+\.xlsx)"/);
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl; // URL generada localmente, nunca proviene del usuario/servidor.
+    link.download = match?.[1] ?? 'proyecto_gantt.xlsx';
+    link.hidden = true;
+    document.body.append(link);
+    try { link.click(); } finally {
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    }
+}

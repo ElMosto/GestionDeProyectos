@@ -1,15 +1,17 @@
 openapi: 3.1.0
 info:
   title: Gestión de Proyectos — Estudio Musical
-  version: 0.7.0
+  version: 0.8.0
   description: |
     API del sistema de gestión del estudio musical.
 
-    Estado: fases 1-5. Autenticación, perfil, usuarios, clientes, proyectos,
+    Estado: fases 1-6. Autenticación, perfil, usuarios, clientes, proyectos,
     etapas, membresías, tareas, cargos, agenda propia de tareas, catálogos,
     ventas, pagos, anulaciones, reembolsos, ticket de venta, espacios, horarios,
     reservas, bloqueos, reuniones, invitaciones individuales, notificaciones y
-    proyecciones propias de agenda. Dashboard y gastos quedan para fase posterior.
+    proyecciones propias de agenda, Gantt XLSX, ticket de proyecto, dashboard,
+    gastos, configuración permitida y auditoría administrativa.
+    La historia comercial privada no tiene endpoint de escritura pública.
 
     Convenciones vinculantes (ver `docs/api-movil.md`):
     - Importes y cantidades como **string** decimal.
@@ -65,6 +67,10 @@ tags:
     description: Espacios, horarios locales IANA y calendario mínimo de ocupaciones (§12)
   - name: reservas
     description: Reservas BANDA propias; ADMIN ve todas. Una sola venta por reserva (§12, D-20–23)
+  - name: finanzas
+    description: Indicadores e historial verificable; solo ADMINISTRADOR (§11, D-28/D-29)
+  - name: administracion
+    description: Gastos, configuración permitida y metadatos de auditoría; solo ADMINISTRADOR
 
 paths:
   /auth/csrf:
@@ -2608,6 +2614,474 @@ paths:
         '403': {$ref: '#/components/responses/AccessForbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
 
+  /projects/{id}/gantt.xlsx:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [proyectos]
+      operationId: downloadProjectGantt
+      summary: Descargar Gantt XLSX real del proyecto autorizado
+      description: |
+        Mismos permisos con sesión o Bearer opaco. ADMIN, líder o miembro autorizado;
+        finanzas solo ADMIN o líder responsable. El resto no recibe importes en ninguna
+        hoja, XML, fórmula, contenido oculto ni metadato. No es una respuesta JSON.
+        from/to DATE opcionales acotan el calendario, sin inventar fechas de tareas.
+        Máximos 5 años, 10000 tareas, 1000 etapas y 200000 celdas proyectadas;
+        cargos, pagos y reembolsos autorizados tienen límite de 10000 por grupo.
+        Sin efectos financieros: solo auditoría de lectura. Descargar por periodos
+        si excede el límite. La descarga no sincroniza cambios del archivo.
+      parameters:
+        - name: from
+          in: query
+          description: Inicio opcional DATE inclusivo, sin conversión de zona.
+          schema: {type: string, format: date}
+        - name: to
+          in: query
+          description: Fin opcional DATE inclusivo, no anterior a from.
+          schema: {type: string, format: date}
+      responses:
+        '200':
+          description: Libro XLSX con hojas Resumen y Gantt; textos literales contra inyección de fórmulas.
+          headers:
+            Content-Disposition:
+              description: 'attachment; filename="proyecto_FOLIO_gantt.xlsx"'
+              schema: {type: string}
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: {type: string, format: binary}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ProjectOutputValidation'}
+  /projects/{id}/ticket:
+    parameters:
+      - $ref: '#/components/parameters/ProjectResourceId'
+    get:
+      tags: [proyectos]
+      operationId: printProjectTicket
+      summary: Ticket financiero interno de proyecto
+      description: |
+        Solo ADMIN o líder responsable; mismo control de objeto con cookie o Bearer.
+        Excepción HTML de impresión al contrato JSON; el futuro móvil no hará scraping.
+        Incluye conceptos, pagos, saldo y estado; nunca gastos internos. Valor interno
+        estimado no equivale a cobro. Comprobante interno; no es factura fiscal.
+        Reimprimir no emite documentos ni registra pagos; solo audita la lectura.
+        Límites de salida de proyecto aplicables también a este recurso.
+      parameters:
+        - name: paper
+          in: query
+          schema: {type: string, enum: [80mm, A4], default: 80mm}
+      responses:
+        '200':
+          description: HTML escapado de impresión para 80 mm o A4.
+          content:
+            text/html:
+              schema: {type: string}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ProjectOutputValidation'}
+  /finance/summary:
+    get:
+      tags: [finanzas]
+      operationId: getFinanceSummary
+      summary: Resumen administrativo de emisión, caja y pendientes
+      description: |
+        Solo ADMINISTRADOR. from/to DATE UTC inclusivos (máximo 366 días);
+        por defecto primer día del mes UTC hasta hoy. cut_off >= to, por defecto to.
+        Emisión comercial del proyecto = creación explícita, incluso BORRADOR (D-28);
+        venta = emisión existente. Snapshots append-only, nunca precios actuales para
+        reconstruir el pasado. Sin evidencia suficiente, 409 HISTORY_INCOMPLETE (D-29).
+        Importe comercial usa primera emisión en el periodo y último total al corte;
+        caja usa fechas efectivas independientemente de la cohorte comercial.
+        Pendientes usa todos los documentos emitidos al corte, no solo el periodo.
+        Reserva cuenta exclusivamente mediante su venta RESERVA. Valor interno va separado.
+        paid_expenses usa paid_at; pending_expenses usa historia al corte. Los filtros
+        client_id, source_type o status excluyen gastos; responsible_id sí los filtra.
+        cash_result = net_cash - paid_expenses, NO utilidad contable. No hay tasas inventadas.
+        limit/offset se validan pero no paginan este agregado de tamaño fijo.
+      parameters:
+        - $ref: '#/components/parameters/FinanceFrom'
+        - $ref: '#/components/parameters/FinanceTo'
+        - $ref: '#/components/parameters/FinanceCutOff'
+        - $ref: '#/components/parameters/FinanceClient'
+        - $ref: '#/components/parameters/FinanceResponsible'
+        - $ref: '#/components/parameters/FinanceSource'
+        - $ref: '#/components/parameters/FinanceStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Agregados con importes string y cobertura comprobada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: {$ref: '#/components/schemas/FinanceSummary'}
+                  meta: {$ref: '#/components/schemas/FinanceReportMeta'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '409': {$ref: '#/components/responses/FinanceHistoryIncomplete'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /finance/cashflow:
+    get:
+      tags: [finanzas]
+      operationId: getFinanceCashflow
+      summary: Evolución mensual UTC de caja
+      description: |
+        Solo ADMINISTRADOR. Mismos rangos, corte, filtros y cobertura que summary.
+        Meses del rango incluidos aunque no tengan movimientos. PAYMENT suma;
+        PAYMENT_VOID resta en voided_at; REFUND resta en fecha efectiva y
+        REFUND_VOID compensa si existe. No reclasifica cobros por fecha de emisión.
+        Gastos pagados usan paid_at. Resultado de caja, no utilidad.
+        limit/offset se validan pero no recortan esta serie mensual acotada a 366 días.
+      parameters:
+        - $ref: '#/components/parameters/FinanceFrom'
+        - $ref: '#/components/parameters/FinanceTo'
+        - $ref: '#/components/parameters/FinanceCutOff'
+        - $ref: '#/components/parameters/FinanceClient'
+        - $ref: '#/components/parameters/FinanceResponsible'
+        - $ref: '#/components/parameters/FinanceSource'
+        - $ref: '#/components/parameters/FinanceStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Serie mensual UTC, con los filtros de gastos descritos en summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/FinanceMonth'}}
+                  meta: {$ref: '#/components/schemas/FinanceReportMeta'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '409': {$ref: '#/components/responses/FinanceHistoryIncomplete'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /finance/receivables:
+    get:
+      tags: [finanzas]
+      operationId: listFinanceReceivables
+      summary: Saldos positivos por documento al corte
+      description: |
+        Solo ADMINISTRADOR. Último total comercial menos neto válido al corte;
+        excluye no cobrables y cancelados. Todos los documentos emitidos hasta cut_off,
+        sin restringirlos a la cohorte from/to. Rango validado como summary.
+        Orden issued_at,id; filtros permitidos preparados, nunca SQL arbitrario.
+      parameters:
+        - $ref: '#/components/parameters/FinanceFrom'
+        - $ref: '#/components/parameters/FinanceTo'
+        - $ref: '#/components/parameters/FinanceCutOff'
+        - $ref: '#/components/parameters/FinanceClient'
+        - $ref: '#/components/parameters/FinanceResponsible'
+        - $ref: '#/components/parameters/FinanceSource'
+        - $ref: '#/components/parameters/FinanceStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Página de documentos con saldo positivo.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/FinanceReceivable'}}
+                  meta:
+                    allOf:
+                      - $ref: '#/components/schemas/FinanceReportMeta'
+                      - $ref: '#/components/schemas/PaginationMeta'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '409': {$ref: '#/components/responses/FinanceHistoryIncomplete'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /finance/documents:
+    get:
+      tags: [finanzas]
+      operationId: listFinanceDocuments
+      summary: Documentos que respaldan el importe comercial y el valor interno
+      description: |
+        Solo ADMINISTRADOR. Cohorte de primera emisión from/to UTC inclusivos, con
+        último snapshot y filtros al cut_off como summary. Excluye cancelados al corte;
+        incluye cobrables y valor interno estimado, también liquidados o con saldo cero.
+        No equivale a receivables, que exige saldo positivo y no restringe cohorte.
+        Orden issued_at,id. Suma total de SALE = commercial_sales_total; PROJECT =
+        commercial_projects_total; ambas suman commercial_total. INTERNAL_ESTIMATE
+        respalda internal_estimated_value, nunca cobros ni cartera.
+        Cobertura histórica obligatoria, sin reconstrucción con precios actuales.
+      parameters:
+        - $ref: '#/components/parameters/FinanceFrom'
+        - $ref: '#/components/parameters/FinanceTo'
+        - $ref: '#/components/parameters/FinanceCutOff'
+        - $ref: '#/components/parameters/FinanceClient'
+        - $ref: '#/components/parameters/FinanceResponsible'
+        - $ref: '#/components/parameters/FinanceSource'
+        - $ref: '#/components/parameters/FinanceStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Página del respaldo comercial con importes exactos y clasificación explícita.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/FinanceCommercialDocument'}}
+                  meta:
+                    allOf:
+                      - $ref: '#/components/schemas/FinanceReportMeta'
+                      - $ref: '#/components/schemas/PaginationMeta'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '409': {$ref: '#/components/responses/FinanceHistoryIncomplete'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /finance/transactions:
+    get:
+      tags: [finanzas]
+      operationId: listFinanceTransactions
+      summary: Eventos efectivos de cobro, anulación y devolución
+      description: |
+        Solo ADMINISTRADOR. Rango UTC y filtros como summary; orden effective_at,id.
+        kind=cash por defecto conserva eventos de cobro/anulación/reembolso;
+        kind=expense devuelve exclusivamente gastos PAGADO por paid_at, no expense_date,
+        sin mezclar cobros. Otros valores dan 422 VALIDATION_FAILED.
+        Identificador de evento string compuesto, por ejemplo PAYMENT:123 o EXPENSE:1,
+        no ID numérico. Importe firmado según kind; gastos siempre negativos.
+        No duplica reservas ni exige emisión en el periodo. La suma negada de amount
+        de todas las páginas expense respalda paid_expenses con los mismos filtros:
+        responsable filtra, cliente/origen/estado financiero excluyen gastos.
+        /expenses conserva su lista operativa filtrada por expense_date.
+      parameters:
+        - name: kind
+          in: query
+          description: Clase de detalle; cada página contiene solo eventos de la clase elegida.
+          schema: {type: string, enum: [cash, expense], default: cash}
+        - $ref: '#/components/parameters/FinanceFrom'
+        - $ref: '#/components/parameters/FinanceTo'
+        - $ref: '#/components/parameters/FinanceCutOff'
+        - $ref: '#/components/parameters/FinanceClient'
+        - $ref: '#/components/parameters/FinanceResponsible'
+        - $ref: '#/components/parameters/FinanceSource'
+        - $ref: '#/components/parameters/FinanceStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Página de eventos financieros trazables.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/FinanceTransaction'}}
+                  meta:
+                    allOf:
+                      - $ref: '#/components/schemas/FinanceReportMeta'
+                      - $ref: '#/components/schemas/PaginationMeta'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '409': {$ref: '#/components/responses/FinanceHistoryIncomplete'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /expenses:
+    get:
+      tags: [administracion]
+      operationId: listExpenses
+      summary: Gastos administrativos paginados
+      description: |
+        Solo ADMINISTRADOR. from/to filtran expense_date DATE inclusivo, máximo 366 días;
+        por defecto mes UTC actual hasta hoy. No usa paid_at para esta lista.
+        No modifica precios de proyecto ni cuentas por cobrar.
+      parameters:
+        - $ref: '#/components/parameters/FinanceFrom'
+        - $ref: '#/components/parameters/FinanceTo'
+        - $ref: '#/components/parameters/FinanceResponsible'
+        - name: project_id
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectId'}
+        - name: status
+          in: query
+          schema: {type: string, enum: [PENDIENTE, PAGADO, CANCELADO]}
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Página de gastos, sin borrado financiero.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/Expense'}}
+                  meta: {$ref: '#/components/schemas/PaginationMeta'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+    post:
+      tags: [administracion]
+      operationId: createExpense
+      summary: Registrar gasto pendiente o efectivamente pagado
+      description: |
+        Solo ADMINISTRADOR. Idempotency-Key obligatorio; mismo contenido conserva
+        respuesta original 201, distinto devuelve 409. Transacción y auditoría.
+        PAGADO requiere paid_at real no futuro ISO 8601 con segundos y zona;
+        PENDIENTE no admite paid_at. No se puede crear CANCELADO.
+        Cookie exige CSRF; Bearer válido no. No crea cargos de proyecto ni cobros.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ExpenseIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExpenseCreate'}
+            example: {concept: Material, amount: '200.00', expense_date: '2026-10-28', responsible_id: '1', status: PENDIENTE, project_id: null, notes: null}
+      responses:
+        '201': {$ref: '#/components/responses/ExpenseResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '409': {$ref: '#/components/responses/ExpenseConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /expenses/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ExpenseId'
+    get:
+      tags: [administracion]
+      operationId: getExpense
+      summary: Consultar gasto administrativo
+      description: Solo ADMINISTRADOR; campos permitidos, IDs y versión string, timestamps UTC.
+      responses:
+        '200': {$ref: '#/components/responses/ExpenseResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [administracion]
+      operationId: updateExpense
+      summary: Editar, pagar o cancelar gasto pendiente con versión e idempotencia
+      description: |
+        Solo ADMINISTRADOR. Únicamente PENDIENTE puede editarse, pasar a PAGADO con
+        paid_at real o CANCELADO sin paid_at. PAGADO y CANCELADO son inmutables;
+        no hay DELETE ni vuelta a pendiente para ocultar caja. Al menos un campo editable.
+        Versión obligatoria vía version/expected_version o If-Match numérico entre
+        comillas; si hay varias deben coincidir. Idempotency-Key en TODO PATCH,
+        incluso no monetario, para repetición segura. Cookie exige CSRF; Bearer no.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/ExpenseIdempotencyKey'
+        - $ref: '#/components/parameters/ProjectIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExpenseUpdate'}
+            example: {expected_version: '1', status: PAGADO, paid_at: '2026-10-28T12:00:00Z'}
+      responses:
+        '200': {$ref: '#/components/responses/ExpenseResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ExpenseConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /settings:
+    get:
+      tags: [administracion]
+      operationId: getSettings
+      summary: Consultar configuración pública permitida al administrador
+      description: |
+        Solo ADMINISTRADOR. Lista blanca studio_name, timezone, currency, version;
+        nunca secretos, rutas, credenciales ni configuración global arbitraria.
+        version es digest SHA256 del estado canónico permitido, no contador de BD.
+      responses:
+        '200': {$ref: '#/components/responses/StudioSettingsResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+    patch:
+      tags: [administracion]
+      operationId: updateSettings
+      summary: Modificar nombre del estudio o zona IANA con digest esperado
+      description: |
+        Solo ADMINISTRADOR; al menos studio_name o timezone. currency MXN solo lectura.
+        expected_version digest string o If-Match con digest entre comillas obligatorio;
+        ambos deben coincidir si se envían juntos. No admite alias version numérico.
+        Cambio de zona con ocupaciones futuras devuelve SETTINGS_TIMEZONE_IN_USE.
+        Cookie exige CSRF; Bearer no. No crea dinero ni ocupa espacios, sin Idempotency-Key.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - name: If-Match
+          in: header
+          description: Alternativa a expected_version; digest SHA256 entre comillas, no versión numérica.
+          schema: {type: string, pattern: '^"[a-f0-9]{64}"$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                studio_name: {type: string, minLength: 1, maxLength: 160}
+                timezone: {type: string, maxLength: 80, description: Zona IANA válida.}
+                expected_version: {$ref: '#/components/schemas/SettingsDigest'}
+      responses:
+        '200': {$ref: '#/components/responses/StudioSettingsResource'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '409':
+          description: VERSION_CONFLICT si digest obsoleto; SETTINGS_TIMEZONE_IN_USE si hay ocupaciones futuras.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /audit-logs:
+    get:
+      tags: [administracion]
+      operationId: listAuditLogs
+      summary: Metadatos paginados de auditoría administrativa
+      description: |
+        Solo ADMINISTRADOR, también con Bearer. Proyección segura exclusivamente
+        de metadatos: no before_json/after_json ni notas, títulos, ubicaciones privadas,
+        contraseñas, secretos o tokens. Conocer entity_id no concede acceso al objeto.
+        from/to UTC inclusivos por created_at, máximo 366 días; mes actual hasta hoy
+        por defecto. action/entity_type son valores comparados por igualdad preparada,
+        patrón permitido, nunca nombres de columnas ni SQL libre.
+      parameters:
+        - $ref: '#/components/parameters/FinanceFrom'
+        - $ref: '#/components/parameters/FinanceTo'
+        - name: actor_id
+          in: query
+          schema: {$ref: '#/components/schemas/ProjectId'}
+        - name: action
+          in: query
+          schema: {type: string, pattern: '^[A-Za-z][A-Za-z0-9_.]{0,59}$'}
+        - name: entity_type
+          in: query
+          schema: {type: string, pattern: '^[A-Za-z][A-Za-z0-9_.]{0,59}$'}
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Página de metadatos sin snapshots sensibles, tampoco para ADMIN.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/AuditLogMetadata'}}
+                  meta: {$ref: '#/components/schemas/PaginationMeta'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/AccessForbidden'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
 components:
   securitySchemes:
     cookieAuth:
@@ -2621,6 +3095,194 @@ components:
       description: Token opaco de dispositivo (Android). Sin JWT.
 
   schemas:
+    FinanceSignedMoney:
+      type: string
+      pattern: '^-?[0-9]+\.[0-9]{2}$'
+      description: Importe decimal exacto MXN; signo negativo permitido en caja y correcciones.
+      examples: ['-200.00']
+    FinanceReportMeta:
+      type: object
+      required: [coverage, generated_at, cut_off, timezone, from, to, business_reason]
+      properties:
+        coverage: {type: string, const: COMPLETE}
+        generated_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+        cut_off: {type: string, format: date}
+        timezone: {type: string, const: UTC}
+        from: {type: string, format: date}
+        to: {type: string, format: date}
+        business_reason: {type: string, description: Explicación informativa; no ramificar por este texto.}
+    FinanceSummary:
+      type: object
+      required: [commercial_total, commercial_sales_total, commercial_projects_total, internal_estimated_value, net_cash, paid_expenses, pending_expenses, cash_result, receivables_total, distribution, currency]
+      properties:
+        commercial_total: {$ref: '#/components/schemas/ProjectMoney'}
+        commercial_sales_total:
+          allOf:
+            - $ref: '#/components/schemas/ProjectMoney'
+          description: Subtotal comercial de ventas, incluidas RESERVA una sola vez.
+        commercial_projects_total:
+          allOf:
+            - $ref: '#/components/schemas/ProjectMoney'
+          description: Subtotal comercial de proyectos cobrables; excluye valor interno estimado.
+        internal_estimated_value: {$ref: '#/components/schemas/ProjectMoney'}
+        net_cash: {$ref: '#/components/schemas/FinanceSignedMoney'}
+        paid_expenses: {$ref: '#/components/schemas/ProjectMoney'}
+        pending_expenses: {$ref: '#/components/schemas/ProjectMoney'}
+        cash_result: {$ref: '#/components/schemas/FinanceSignedMoney'}
+        receivables_total: {$ref: '#/components/schemas/ProjectMoney'}
+        currency: {type: string, const: MXN}
+        distribution:
+          type: object
+          description: Cobros netos por origen, no importes comerciales; reservas solo por venta.
+          required: [ORDINARIA, RESERVA, PROYECTO]
+          properties:
+            ORDINARIA: {$ref: '#/components/schemas/FinanceSignedMoney'}
+            RESERVA: {$ref: '#/components/schemas/FinanceSignedMoney'}
+            PROYECTO: {$ref: '#/components/schemas/FinanceSignedMoney'}
+    FinanceMonth:
+      type: object
+      required: [month, net_cash, paid_expenses, cash_result]
+      properties:
+        month: {type: string, pattern: '^[0-9]{4}-[0-9]{2}$'}
+        net_cash: {$ref: '#/components/schemas/FinanceSignedMoney'}
+        paid_expenses: {$ref: '#/components/schemas/ProjectMoney'}
+        cash_result: {$ref: '#/components/schemas/FinanceSignedMoney'}
+    FinanceDocumentIdentity:
+      type: object
+      required: [document_type, document_id, folio, source_type, client_id, responsible_id]
+      properties:
+        document_type: {type: string, enum: [PROJECT, SALE]}
+        document_id: {$ref: '#/components/schemas/ProjectId'}
+        folio: {type: string}
+        source_type: {type: string, enum: [INTERNO, EXTERNO, ORDINARIA, RESERVA]}
+        client_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        responsible_id: {$ref: '#/components/schemas/ProjectId'}
+    FinanceReceivable:
+      allOf:
+        - $ref: '#/components/schemas/FinanceDocumentIdentity'
+        - type: object
+          required: [issued_at, total, net_paid, balance, payment_status]
+          properties:
+            issued_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            total: {$ref: '#/components/schemas/ProjectMoney'}
+            net_paid: {$ref: '#/components/schemas/ProjectMoney'}
+            balance: {$ref: '#/components/schemas/ProjectMoney'}
+            payment_status: {type: string, enum: [NO_PAGADO, PARCIAL, PAGADO, SIN_CARGO]}
+    FinanceCommercialDocument:
+      allOf:
+        - $ref: '#/components/schemas/FinanceReceivable'
+        - type: object
+          required: [billable, commercial_class]
+          properties:
+            billable: {type: boolean}
+            commercial_class: {type: string, enum: [SALE, PROJECT, INTERNAL_ESTIMATE]}
+      description: Respaldo de emisión; admite saldo cero y no cobrables, a diferencia de la lista de cartera.
+    FinanceTransaction:
+      oneOf:
+        - $ref: '#/components/schemas/FinanceCashTransaction'
+        - $ref: '#/components/schemas/FinanceExpenseTransaction'
+      description: kind de respuesta discrimina eventos cash frente a EXPENSE; no se mezclan clases en una página.
+    FinanceExpenseTransaction:
+      type: object
+      required: [id, kind, expense_id, folio, project_id, concept, responsible_id, effective_at, amount]
+      properties:
+        id: {type: string, pattern: '^EXPENSE:[1-9][0-9]*$'}
+        kind: {type: string, const: EXPENSE}
+        expense_id: {$ref: '#/components/schemas/ProjectId'}
+        folio: {type: string}
+        project_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        concept: {type: string}
+        responsible_id: {$ref: '#/components/schemas/ProjectId'}
+        effective_at:
+          allOf:
+            - $ref: '#/components/schemas/FinanceTimestamp'
+          description: paid_at real del gasto, normalizado a UTC; no expense_date.
+        amount:
+          type: string
+          pattern: '^-[0-9]+\.[0-9]{2}$'
+          description: Importe exacto negativo; la suma negada respalda paid_expenses.
+      example: {id: 'EXPENSE:1', kind: EXPENSE, expense_id: '1', folio: GAS-000001, project_id: null, concept: Material, responsible_id: '1', effective_at: '2026-10-28T12:00:00Z', amount: '-200.00'}
+    FinanceCashTransaction:
+      allOf:
+        - $ref: '#/components/schemas/FinanceDocumentIdentity'
+        - type: object
+          required: [id, kind, effective_at, amount]
+          properties:
+            id:
+              type: string
+              pattern: '^(PAYMENT|PAYMENT_VOID|REFUND|REFUND_VOID):[1-9][0-9]*$'
+              description: Identificador estable del evento; no es un ID numérico de documento.
+            kind: {type: string, enum: [PAYMENT, PAYMENT_VOID, REFUND, REFUND_VOID]}
+            effective_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            amount: {$ref: '#/components/schemas/FinanceSignedMoney'}
+    ExpenseFields:
+      type: object
+      properties:
+        project_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        concept: {type: string, minLength: 1, maxLength: 200}
+        amount:
+          allOf:
+            - $ref: '#/components/schemas/ProjectMoney'
+          description: Importe exacto string estrictamente positivo.
+        expense_date: {type: string, format: date}
+        responsible_id: {$ref: '#/components/schemas/ProjectId'}
+        status: {type: string, enum: [PENDIENTE, PAGADO, CANCELADO]}
+        paid_at:
+          oneOf:
+            - $ref: '#/components/schemas/FinanceTimestamp'
+            - {type: 'null'}
+          description: Obligatorio y no futuro para PAGADO; null en otros estados. Salida UTC.
+        notes: {type: [string, 'null'], maxLength: 10000}
+    ExpenseCreate:
+      allOf:
+        - $ref: '#/components/schemas/ExpenseFields'
+      required: [concept, amount, expense_date, responsible_id, status]
+      description: No admite CANCELADO al crear. PAGADO requiere paid_at real con segundos y zona.
+      unevaluatedProperties: false
+    ExpenseUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ExpenseFields'
+        - $ref: '#/components/schemas/FinanceVersionFields'
+      description: Versión obligatoria por cuerpo o If-Match; al menos un campo editable, solo mientras PENDIENTE.
+      unevaluatedProperties: false
+    Expense:
+      allOf:
+        - $ref: '#/components/schemas/ExpenseFields'
+        - type: object
+          properties:
+            id: {$ref: '#/components/schemas/ProjectId'}
+            folio: {type: string}
+            created_by: {$ref: '#/components/schemas/ProjectId'}
+            version: {$ref: '#/components/schemas/ProjectVersion'}
+            created_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+            updated_at: {$ref: '#/components/schemas/FinanceTimestamp'}
+      required: [id, folio, project_id, concept, amount, expense_date, responsible_id, status, paid_at, notes, created_by, version, created_at, updated_at]
+    SettingsDigest:
+      type: string
+      pattern: '^[a-f0-9]{64}$'
+      description: SHA256 del estado canónico permitido, no contador ni número de versión de BD.
+    StudioSettings:
+      type: object
+      required: [studio_name, timezone, currency, version]
+      properties:
+        studio_name: {type: string}
+        timezone: {type: string, description: Zona IANA del estudio.}
+        currency: {type: string, const: MXN, readOnly: true}
+        version: {$ref: '#/components/schemas/SettingsDigest'}
+    AuditLogMetadata:
+      type: object
+      description: Lista blanca segura. No snapshots, contenido privado de reuniones, secretos ni tokens.
+      additionalProperties: false
+      required: [id, actor_id, action, entity_type, entity_id, request_id, ip_address, created_at]
+      properties:
+        id: {$ref: '#/components/schemas/ProjectId'}
+        actor_id: {$ref: '#/components/schemas/FinanceNullableId'}
+        action: {type: string}
+        entity_type: {type: string}
+        entity_id: {type: [string, 'null'], pattern: '^[0-9]+$', description: 'Puede ser cero para configuración, no implica acceso.'}
+        request_id: {type: [string, 'null']}
+        ip_address: {type: [string, 'null']}
+        created_at: {$ref: '#/components/schemas/FinanceTimestamp'}
     MeetingInstant:
       type: string
       format: date-time
@@ -4091,6 +4753,54 @@ components:
                 $ref: '#/components/schemas/DuplicateWarning'
 
   parameters:
+    FinanceFrom:
+      name: from
+      in: query
+      description: DATE inclusivo UTC; primer día del mes UTC actual por defecto. Máximo 366 días inclusivos hasta to.
+      schema: {type: string, format: date}
+    FinanceTo:
+      name: to
+      in: query
+      description: DATE inclusivo UTC; hoy UTC por defecto. Debe ser >= from y <= cut_off.
+      schema: {type: string, format: date}
+    FinanceCutOff:
+      name: cut_off
+      in: query
+      description: DATE UTC inclusivo, por defecto to; >= to. No admite 9999-12-31.
+      schema: {type: string, format: date}
+    FinanceClient:
+      name: client_id
+      in: query
+      description: Filtra documentos y sus cobros; excluye gastos sin asignación comercial.
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    FinanceResponsible:
+      name: responsible_id
+      in: query
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    FinanceSource:
+      name: source_type
+      in: query
+      description: Origen comercial; reserva solo mediante su venta. Excluye gastos.
+      schema: {type: string, enum: [INTERNO, EXTERNO, ORDINARIA, RESERVA]}
+    FinanceStatus:
+      name: status
+      in: query
+      description: Estado calculado de pago del documento al corte, no estado operativo. Excluye gastos.
+      schema: {type: string, enum: [NO_PAGADO, PARCIAL, PAGADO, SIN_CARGO]}
+    ExpenseId:
+      name: id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/ProjectId'}
+    ExpenseIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Obligatorio en POST y todo PATCH de gastos. Alcance actor+operación;
+        misma clave/contenido reproduce respuesta y estado originales;
+        distinto contenido da IDEMPOTENCY_KEY_REUSED. Persistencia transaccional.
+      schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[!-~]+$'}
     MeetingId:
       name: id
       in: path
@@ -4339,6 +5049,42 @@ components:
         pattern: '^[0-9]+$'
 
   responses:
+    ProjectOutputValidation:
+      description: VALIDATION_FAILED por rango, DATE o papel inválido; EXPORT_TOO_LARGE por límites de salida.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    FinanceHistoryIncomplete:
+      description: HISTORY_INCOMPLETE; falta evidencia verificable para reconstruir indicadores. Nunca se sustituye historia por cero ni total actual.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example:
+            error: {code: HISTORY_INCOMPLETE, message: No existe evidencia histórica completa de emisión; no se pueden reconstruir estos indicadores.}
+            request_id: req_finance_example
+    ExpenseResource:
+      description: Gasto con IDs, versión e importe string, fechas DATE y timestamps UTC.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/Expense'}
+    ExpenseConflict:
+      description: VERSION_CONFLICT por versión obsoleta, IDEMPOTENCY_KEY_REUSED por otro contenido, EXPENSE_IMMUTABLE si pagado o cancelado.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    StudioSettingsResource:
+      description: Solo estado permitido con moneda MXN de lectura y digest de concurrencia.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/StudioSettings'}
     MeetingResource:
       description: Reunión autorizada con proyección según actor y respuesta vigente; misma privacidad en replay.
       content:

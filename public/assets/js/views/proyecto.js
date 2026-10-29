@@ -1,7 +1,7 @@
-import { api, el } from '../api.js';
+import { api, downloadFile, el } from '../api.js';
 import { dataTable, emptyState, errorState, field, formatDateTime, loadingState, mount, notice, pageHeader } from '../ui.js';
 import { PROJECT_STATUSES, workLabel, workOptions } from '../data.js';
-import { button, cap, completeCollection, dateText, directory, editDialog, finance, idPath, loadSection, manages, moneyText, pagedList, roleCode, selectField } from '../project-ui.js';
+import { button, cap, completeCollection, dateField, dateText, directory, editDialog, finance, idPath, loadSection, manages, moneyText, pagedList, roleCode, selectField } from '../project-ui.js';
 import { chargeForm, projectForm, stageForm } from '../project-forms.js';
 import { taskDetail, taskForm, taskTable } from '../task-ui.js';
 import { renderPayments } from '../payment-ui.js';
@@ -45,6 +45,23 @@ export async function renderProyecto(root, ctx, id) {
         mount(root, el('article', { class: 'stack' }, [
             el('p', {}, el('a', { href: '#/proyectos' }, '← Volver a proyectos')),
             pageHeader({ title: p.name, lead: `${p.folio ?? ''} · ${workLabel(p.type)} · ${workLabel(p.status)}` }),
+            el('div', { class: 'form-actions' }, [
+                cap(ctx, 'projects.export') ? button('Imprimir proyecto', () => editDialog({
+                    title: 'Exportar Gantt XLSX',
+                    fields: [dateField('from', 'Desde (opcional)'), dateField('to', 'Hasta (opcional)'),
+                        notice({ message: 'Sin rango se exporta el proyecto completo. Para proyectos extensos, divide por periodos. Las tareas no programadas permanecen identificadas.' })],
+                    save: async (values) => {
+                        const query = new URLSearchParams();
+                        if (values.from) query.set('from', values.from);
+                        if (values.to) query.set('to', values.to);
+                        await downloadFile(`${path}/gantt.xlsx${query.size ? `?${query}` : ''}`);
+                        return { data: null };
+                    }, done: () => {}, submitLabel: 'Descargar XLSX', toastMessage: 'Archivo descargado.',
+                })) : null,
+                canFinance && cap(ctx, 'projects.ticket') ? el('a', { class: 'btn btn-secondary', href: `/api/v1${path}/ticket?paper=80mm`, target: '_blank', rel: 'noopener noreferrer' }, 'Imprimir ticket') : null,
+                canFinance && cap(ctx, 'projects.ticket') ? el('a', { class: 'btn btn-secondary', href: `/api/v1${path}/ticket?paper=A4`, target: '_blank', rel: 'noopener noreferrer' }, 'Ticket A4') : null,
+            ]),
+            el('p', { class: 'help', text: 'La impresión es una lectura: no registra pagos. La exportación ajusta la escala al rango; si el servidor indica un límite, consulta administración para exportar un periodo acotado.' }),
             navigation, content,
         ]));
         void select(active);

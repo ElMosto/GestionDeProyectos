@@ -29,6 +29,9 @@ tbody th { font-weight: normal; }
 .totals dt, .totals dd { flex: 1; min-width: 0; }
 .totals dd { margin: 0; text-align: right; }
 .payment { border-bottom: 1px dotted #777; padding-bottom: .5em; }
+.project-ticket .project-description { white-space: pre-wrap; }
+.project-ticket .totals div { flex-wrap: wrap; }
+.project-ticket .ticket { height: auto; overflow: visible; }
 @media print {
     html, body { margin: 0; background: white; }
     .no-print { display: none !important; }

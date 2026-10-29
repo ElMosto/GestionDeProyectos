@@ -15,7 +15,7 @@ use PDOException;
  */
 final class SchemaIntegrityTest extends DatabaseTestCase
 {
-    public function test_H_all_34_tables_exist_and_use_innodb(): void
+    public function test_H_all_35_tables_exist_and_use_innodb(): void
     {
         // §14 — todas las tablas son InnoDB: sin transacciones no hay reservas ni
         // pagos seguros (fase 3-4), así que esto es un requisito de la base.
@@ -24,7 +24,7 @@ final class SchemaIntegrityTest extends DatabaseTestCase
         );
         $rows = $statement === false ? [] : $statement->fetchAll(\PDO::FETCH_NUM);
 
-        $this->assertCount(34, $rows, 'El esquema de fase 1 tiene exactamente 34 tablas.');
+        $this->assertCount(35, $rows, 'Las fases 1–6 incluyen 35 tablas, con historia comercial.');
         // information_schema ordena con la colación del servidor (ignora algunos
         // signos); comparar conjuntos en orden PHP evita depender de esa colación.
         $names = array_column($rows, 0);
@@ -177,7 +177,7 @@ final class SchemaIntegrityTest extends DatabaseTestCase
         $versions = $this->pdo->query('SELECT version FROM schema_migrations ORDER BY version')
             ->fetchAll(\PDO::FETCH_COLUMN);
 
-        $this->assertSame(['001', '002', '003', '004', '005', '006', '007', '008'], $versions);
+        $this->assertSame(['001', '002', '003', '004', '005', '006', '007', '008', '009'], $versions);
 
         $roles = $this->pdo->query('SELECT code FROM roles ORDER BY id')->fetchAll(\PDO::FETCH_COLUMN);
         $this->assertSame(['ADMINISTRADOR', 'LIDER_PROYECTO', 'COLABORADOR'], $roles);

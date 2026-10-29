@@ -26,6 +26,7 @@ final class SchemaTool
         'api_tokens',
         'audit_logs',
         'clients',
+        'commercial_document_events',
         'expenses',
         'extras',
         'idempotency_requests',

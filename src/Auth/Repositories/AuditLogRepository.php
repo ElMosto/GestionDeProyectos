@@ -29,7 +29,7 @@ final class AuditLogRepository
         ?array $after,
         ?string $requestId,
         ?string $ip,
-    ): void {
+    ): int {
         $stmt = $this->db->pdo()->prepare(
             'INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, before_json, after_json, request_id, ip_address)'
             . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
@@ -45,6 +45,7 @@ final class AuditLogRepository
             $requestId === null ? null : mb_substr($requestId, 0, 64),
             $ip === null ? null : mb_substr($ip, 0, 45),
         ]);
+        return (int) $this->db->pdo()->lastInsertId();
     }
 
     /**

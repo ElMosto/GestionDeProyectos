@@ -48,8 +48,16 @@ import { renderReserva } from './views/reserva.js';
 import { renderReuniones } from './views/reuniones.js';
 import { renderReunion } from './views/reunion.js';
 import { renderNotificaciones } from './views/notificaciones.js';
+import { renderFinanzas } from './views/finanzas.js';
+import { renderGastos } from './views/gastos.js';
+import { renderAuditoria } from './views/auditoria.js';
+import { renderConfiguracion } from './views/configuracion.js';
 
 const ROUTES = {
+    '/finanzas': { title: 'Finanzas', render: renderFinanzas },
+    '/gastos': { title: 'Gastos', render: renderGastos },
+    '/auditoria': { title: 'Auditoría', render: renderAuditoria },
+    '/configuracion': { title: 'Configuración', render: renderConfiguracion },
     '/inicio': { title: 'Inicio', render: renderInicio },
     '/clientes': { title: 'Clientes', render: renderClientes },
     '/usuarios': { title: 'Usuarios', render: renderUsuarios },
@@ -195,6 +203,10 @@ function renderChrome() {
         { path: '/espacios', label: 'Espacios', capability: 'spaces.viewOccupancy' },
         { path: '/productos', label: 'Productos / Extras', capability: 'catalog.view' },
         { path: '/usuarios', label: 'Usuarios', capability: 'users.manage' },
+        { path: '/finanzas', label: 'Finanzas', capability: 'finance.dashboard' },
+        { path: '/gastos', label: 'Gastos', capability: 'expenses.manage' },
+        { path: '/auditoria', label: 'Auditoría', capability: 'audit.view' },
+        { path: '/configuracion', label: 'Configuración', capability: 'settings.manage' },
         { path: '/mi-usuario', label: 'Mi usuario' },
     ].filter((item) => item.allowed !== false && (!item.capability || session.capabilities[item.capability] === true));
 

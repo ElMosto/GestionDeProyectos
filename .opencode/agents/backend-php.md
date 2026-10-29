@@ -34,6 +34,9 @@ permissions:
     resource: "docs/api-reuniones.md"
     effect: allow
   - action: edit
+    resource: "docs/api-finanzas.md"
+    effect: allow
+  - action: edit
     resource: "src/Auth/**"
     effect: deny
   - action: edit

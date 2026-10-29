@@ -888,3 +888,257 @@ por invitados. Advertir cruces personales con booleano/etiqueta genérica, sin e
   ocupación y conflictos parciales siguen en servicio. No presentar el UNIQUE de intervalo
   exacto como exclusión completa. UTC/modo estricto en conexión y verificación del hosting
   siguen siendo obligatorios; esta revisión local no cierra los bloqueos de operación.
+
+## Fase 6: revisión previa de finanzas (§9, §11, §14, §18, §19.G/H)
+
+### Resultado: migración 009 aplicada, decisiones D-28/D-29
+
+`009_commercial_history.sql` añade la tabla **35**, `commercial_document_events`, y amplía
+gastos con CANCELADO, CHECK de coherencia de paid_at e índice de pagos de gastos. Aplicada y
+verificada en MariaDB local real; no modifica migraciones anteriores ni implementa backend.
+**El esquema previo no bastaba para prometer cortes comerciales históricos exactos.** El
+principal adoptó una única historia comercial sin columnas redundantes y sin backfill inventado.
+
+Hallazgos concretos:
+
+- `projects` no tiene `issued_at` ni `cancelled_at`. `created_at` fecha el BORRADOR, cuyo importe
+  es editable y que puede no emitirse nunca. `actual_start` es DATE operativa, no emisión.
+- **D-28/D-29, reemplaza la propuesta inicial de PLANIFICADO:** emisión comercial del proyecto
+  = creación explícita del documento, también si su estado operativo es BORRADOR. El backend
+  debe insertar ISSUE vinculado al audit de creación en ese mismo instante/transacción. No
+  usa created_at histórico como proxy ni retrofecha documentos heredados. Mantiene compatibles
+  los cobros de BORRADOR ya admitidos en fase 3. `issued_at` se conserva al pausar, finalizar,
+  cancelar o reabrir; FINALIZADO no liquida pago. El estado operativo no determina la emisión.
+  La lectura de emisión es DATETIME UTC, nullable únicamente para historia sin evidencia o
+  documentos todavía no emitidos (ventas borrador); cobertura faltante exige error explícito.
+- `PROJECT_TRANSITION` registra estado anterior/nuevo y `audit_logs.created_at`: permite fechar
+  planificación/cancelación/reapertura realmente auditadas. Reaperturas sucesivas impiden
+  resolver estado histórico con un único `cancelled_at` permanente.
+- Ventas tienen `issued_at` real, pero no `cancelled_at`. `SALE_CANCEL` registra cancelación
+  ordinaria y coordinada de reserva en la misma transacción. Usar su `created_at`, nunca
+  `sales.updated_at`; este último puede reflejar pagos u otros cambios. No hace falta añadir
+  otra columna solo para consultar una cancelación que ya tiene evidencia fechada.
+- `SALE_ISSUE.after_json.total` congela el total emitido; la excepción de reserva cambia el
+  total emitido mediante `SALE_RESERVATION_RESCHEDULE` (antes/después exactos). Usar el último
+  valor anterior al corte, no el `sales.total` actual para todos los meses históricos.
+- Proyectos/cargos permiten cambiar base, cliente, condición cobrable, clasificación y cargos.
+  Los audits actuales contienen deltas heterogéneos, no snapshots completos por proyecto:
+  `PROJECT_CHARGE_CREATE/UPDATE` referencia `project_charge`, no el proyecto. Reconstrucción
+  posible solo tras comprobar cadena completa, vínculo y valores, nunca por suposición.
+- Antes de 009, expenses solo admitía PENDIENTE/PAGADO y el CHECK de PAGADO era unilateral.
+  **009 admite CANCELADO**, y el nuevo CHECK prohíbe paid_at en PENDIENTE/CANCELADO. El CHECK
+  anterior se conserva: no se edita 006 aplicada.
+
+### Contrato de 009: una tabla, no campos duplicados
+
+Se adoptó **una tabla append-only `commercial_document_events`**. No añadir a la vez
+`projects.issued_at`, `projects.cancelled_at`, `sales.cancelled_at` y una segunda historia de
+valores: la proyección temporal de esa única tabla proporciona emisión y estado. El ledger
+de cobros sigue siendo payments/refunds; esta tabla **no crea dinero ni sustituye sus FK**.
+
+Contrato DDL aplicado (PK/FK BIGINT UNSIGNED, RESTRICT):
+
+| Campo | Tipo/nullabilidad y significado |
+|---|---|
+| `id` | `BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY` |
+| `project_id`, `sale_id` | `BIGINT UNSIGNED NULL`, FK RESTRICT; CHECK XOR exactamente uno |
+| `audit_log_id` | `BIGINT UNSIGNED NOT NULL UNIQUE`, FK RESTRICT a audit_logs; una evidencia por snapshot |
+| `kind` | `ENUM('ISSUE','CHANGE','CANCEL','REOPEN','BASELINE') NOT NULL` |
+| `occurred_at` | `DATETIME NOT NULL` UTC: instante del cambio/evidencia; no fecha retrospectiva inventada |
+| `issued_at` | `DATETIME NULL` UTC; misma primera emisión en todos los eventos del documento |
+| `total` | `DECIMAL(12,2) NOT NULL`, CHECK >= 0; base + cargos ACTIVO en proyectos |
+| `billable` | `TINYINT(1) NOT NULL`, CHECK IN (0,1); ventas siempre 1 |
+| `source_type` | `ENUM('INTERNO','EXTERNO','ORDINARIA','RESERVA') NOT NULL`; CHECK coherente con FK elegida |
+| `client_id` | `BIGINT UNSIGNED NULL`, FK RESTRICT; cliente a ese instante, no el actual |
+| `responsible_id` | `BIGINT UNSIGNED NOT NULL`, FK RESTRICT users; líder de proyecto/responsable de venta |
+| `currency` | `CHAR(3) NOT NULL`; no sumar monedas distintas en una cifra |
+| `cancelled` | `TINYINT(1) NOT NULL`, CHECK IN (0,1); estado comercial, no operativo |
+| `created_at` | `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`, UTC de inserción |
+
+InnoDB/utf8mb4_unicode_ci. Sin `version`/`updated_at`: eventos inmutables sin PATCH. CHECK de
+orden `issued_at IS NULL OR issued_at <= occurred_at`; ISSUE exige emisión no NULL y no
+cancelado; CANCEL exige cancelled=1 y REOPEN exige cancelled=0. Dos triggers BEFORE UPDATE/DELETE
+con SIGNAL SQLSTATE 45000 rechazan incluso cambios sin efecto. Son sentencias únicas sin
+DELIMITER/BEGIN, compatibles con los ejecutores PDO actuales. **No impiden TRUNCATE/DROP**:
+cuenta de producción de mínimos privilegios, sin DDL; migraciones con cuenta de despliegue.
+`audit_logs` no tiene trigger que impida UPDATE/DELETE, aunque la FK impide borrar evidencia
+referenciada. Privilegios TRIGGER y configuración del hosting siguen pendientes de verificar.
+Registrar primero audit mínimo y después evento dentro de la **misma transacción del cambio**;
+fallo de auditoría/evento revierte negocio. El actor/request_id quedan en audit, sin duplicarlos.
+
+Crear proyecto genera ISSUE; emitir venta/reserva automática genera ISSUE. Cambiar importe/cargos activos, cliente, líder, tipo o billable tras emitir
+genera CHANGE con snapshot completo; cancelar/reabrir genera CANCEL/REOPEN. Reprogramación de
+reserva actualiza la misma venta y genera CHANGE, nunca un segundo documento comercial.
+Operaciones puramente operativas/pagos no necesitan evento comercial. Bloqueo del documento
+antes de calcular snapshot; idempotencia/replay no inserta otro evento. El servicio garantiza
+continuidad de primera emisión, correspondencia audit/documento y secuencia válida: CHECK no
+puede contrastar otras filas. No habilitar edición genérica de ventas emitidas.
+
+Solo dos índices temporales adicionales a PK/UNIQUE/FK: `(project_id,occurred_at,id)` y
+`(sale_id,occurred_at,id)`, justificados por el último snapshot por documento al corte:
+
+```sql
+-- Último snapshot comercial antes del extremo exclusivo del corte.
+SELECT * FROM commercial_document_events
+ WHERE project_id = :project AND occurred_at < :cut_end
+ ORDER BY occurred_at DESC, id DESC LIMIT 1;
+-- Para venta usar sale_id. Para emisión: primer ISSUE por ese mismo documento.
+```
+
+Un solo snapshot por documento antes de agregar. El instante de emisión selecciona el periodo
+comercial; el último snapshot hasta corte determina valor/clasificación y cancelación a corte.
+Así un ajuste posterior modifica cortes posteriores, **no** reescribe el corte anterior. Esto
+define explícitamente «valor comercial a corte de documentos emitidos en el periodo», no suma
+de cobros ni reconocimiento contable de ingresos. La evolución debe declarar si representa
+cohortes de emisión o flujos de caja; no mezclar ambos ejes temporales.
+
+Se descartó usar auditoría heterogénea como única historia de lectura. Puede aportar evidencia
+para una importación supervisada, no para un backfill automático que suponga valores faltantes.
+Si un documento heredado carece de cobertura para el corte solicitado, el endpoint debe
+rechazar **HISTORY_INCOMPLETE**, no excluirlo silenciosamente ni usar su valor actual/created_at.
+
+### Backfill y despliegue sin fabricar historia
+
+- Venta local auditada: emitir snapshot inicial en `sales.issued_at` con total de SALE_ISSUE;
+  ordenar cambios/cancelaciones por `(audit_logs.created_at,id)`. Si emisión y audit difieren,
+  conservar evidencia y validar el orden antes de importar. Los timestamps DATETIME tienen
+  resolución de segundos: usar ID como desempate determinista, no prometer precisión de commit.
+- Proyecto heredado: solo evidencia comercial explícita permite establecer emisión y valor;
+  created_at, planificación, importe o pago no fabrican retrospectivamente un evento ISSUE.
+- Si no se puede reconstruir todo, BASELINE captura el estado **en el instante de adopción**,
+  con issued_at NULL cuando no conste; no lo retrofecha. Publicar cobertura por documento y
+  rechazar consultas anteriores a su cobertura, en lugar de excluir documentos y subestimar
+  totales sin aviso. No insertar un BASELINE con fecha de emisión histórica y total actual
+  como si demostrara el precio de emisión. Borradores nunca emitidos no entran en receivables.
+- Aplicada primero en BD dedicada vacía, después upgrade con fixtures, DOWN y reaplicación.
+  DOWN elimina historia: exportación/respaldo previo
+  obligatoria y no revertir mientras el backend la requiera. No ejecutar sobre bases compartidas
+  sin coordinación. 009 no contiene INSERT/backfill: todas las filas comerciales siguen vacías
+  tras aplicar. El fixture heredado de gestion_test sigue sin evento y no está certificado como
+  historia completa; se recreará por el flujo actualizado en las pruebas funcionales.
+
+### Corte del ledger: fecha efectiva y anulación temporal
+
+Contrato propuesto: rangos `[from_utc,to_utc)`; fecha de corte inclusiva se normaliza a
+`cut_end` exclusivo. Si la UI acepta DATE local, convertir sus medianoches con zona IANA del
+estudio; no concatenar 23:59:59 ni aplicar DATE() al campo indexado. Para saldo a corte:
+
+```sql
+SELECT COALESCE(SUM(p.amount - COALESCE((
+ SELECT SUM(r.amount) FROM refunds r
+  WHERE r.payment_id = p.id AND r.effective_at < :refund_cut_end
+    AND (r.voided_at IS NULL OR r.voided_at >= :refund_void_cut_end)
+), 0.00)), 0.00) AS net_at_cut
+FROM payments p
+WHERE p.sale_id = :sale AND p.effective_at < :payment_cut_end
+  AND (p.voided_at IS NULL OR p.voided_at >= :payment_void_cut_end);
+```
+
+Los cuatro parámetros de corte representan el mismo instante, con nombres distintos para PDO
+sin emulación. No añadir `status='REGISTRADO'` a esta consulta: excluiría pagos anulados
+**después** del corte. Una anulación hasta corte excluye el asiento, no crea devolución de
+caja. Reembolso usa su propia fecha efectiva y anulación; no tratarlo como cambio del total
+comercial. Para periodo, sumar pagos y refunds separadamente en su rango efectivo, evaluando
+anulaciones a la fecha de reporte declarada. Una corrección posterior puede restituir un periodo
+antiguo en un reporte recalculado; mostrar fecha de corte, no prometer cifras inalterables.
+
+Esto es corte por **fecha efectiva según registros conocidos al consultar**, no reconstrucción
+«lo que el sistema conocía entonces». Un pago registrado hoy con fecha efectiva antigua altera
+esa lectura. Si se exige vista por conocimiento, añadir explícitamente filtro created_at y
+regla equivalente de snapshots; no introducirlo sin definir ambos relojes. Validar que una
+anulación no tenga fecha anterior al asiento y que no haya ANULADO sin voided_at (refunds no
+lo garantiza actualmente). Rechazar/diagnosticar historia corrupta, no contarla como vigente.
+
+Receivables: unir **una fila comercial por documento** a pagos/reembolsos preagregados; saldo =
+total a corte - neto a corte. Proyecto billable=0 no genera cuenta aunque tenga valor interno;
+cancelado a corte no genera cuenta y debe tener dinero resuelto. Reserva se agrupa como venta
+RESERVA, nunca se vuelve a sumar desde reservations. No JOIN directo pagos×refunds×partidas×cargos.
+Cliente/responsable/tipo del filtro deben ser los del snapshot elegido, no los del registrador
+del pago salvo filtro explícito distinto. SUM DECIMAL/COALESCE decimal y JSON como string;
+nunca cast a float. Neto/saldo negativo inesperado requiere diagnóstico, no ocultarlo con GREATEST.
+
+### Gastos, cargos, settings y auditoría: contrato pendiente de integración
+
+- Gastos pagados: periodo por `paid_at` UTC, **no expense_date**. Pendientes: `expense_date`
+  DATE y estado a corte si se ofrece historia (audit de creación/pago/cancelación necesario).
+  CANCELADO ya disponible por 009; permitir cancelar solo PENDIENTE,
+  conservando motivo/instante/responsable en audit. PAGADO no se cancela para simular devolución;
+  resolver una corrección real requiere contrato específico. No editar importe/fecha de un
+  PAGADO ni volver a PENDIENTE en esta fase. CHECK adicional aplicado:
+  `(status='PAGADO' AND paid_at IS NOT NULL) OR (status<>'PAGADO' AND paid_at IS NULL)`;
+  preflight ejecutado sin conflictos en las dos bases compartidas. Reversión del ENUM exige
+  cero CANCELADO, sin borrarlos ni convertirlos artificialmente para forzar DOWN.
+- Crear gasto exige Idempotency-Key, secuencia `expense`, validación de responsable activo y
+  permiso ADMIN; project_id NULL = gasto general. Si referencia proyecto, validar pertenencia
+  bajo lock y guardar audit financiero mínimo en la misma transacción. No aumenta base/cargos
+  ni total comercial y no se incluye en ticket de cliente (§9).
+- Cargos actuales: solo `ACTIVO` suma; `charge_date` es fecha comercial sin hora, `created_at`
+  instante de registro. Propuesta: charge_date no futura al registrar y cambios efectivos al
+  instante auditado, nunca reescribir snapshots previos retroactivamente por editar charge_date.
+  Documentar esta propuesta en decisiones; los CHECK actuales no garantizan fecha no futura.
+- Settings GET/PATCH con allowlist explícita: `studio_name`, `timezone` y dirección de impresión
+  opcional solo cuando se acuerde su clave. No devolver todas las settings arbitrariamente ni
+  inventar domicilio/tasas/tarifa. timezone debe ser IANA válida; strings/dinero según contrato.
+  Auditoría y versionado optimista por fila existente; rechazar claves desconocidas.
+- Auditoría global ADMIN no da acceso a agenda privada ajena (§13). No devolver JSON crudo:
+  proyección por acción con lista blanca, excluyendo descripción, notas, location/enlaces,
+  invitados y payload de reuniones incluso para ADMIN no participante. La sanitización actual
+  elimina secretos, **no** elimina todos esos campos. Detalle financiero mínimo permitido a
+  ADMIN; no exponer hashes, tokens, referencia privada innecesaria ni notas de otros módulos.
+
+### Verificación local de lectura (2026-10-28), índices y pruebas pendientes
+
+MariaDB real **10.4.32**, aplicación `gestion`, 127.0.0.1:3306. Solo SELECT/SHOW/EXPLAIN:
+
+- Conteos exactos `gestion`: projects/sales/payments/refunds/expenses = **0/0/0/0/0**.
+  `gestion_test`: **0/1/0/0/0**. La venta 1 es RESERVA/EMITIDA, total **120.00**, emisión
+  **2026-10-28 18:58:00**, y existe SALE_ISSUE a ese mismo instante con total string 120.00.
+  No hay evidencia local de proyectos históricos que permita probar reconstrucción general.
+- SHOW CREATE de expenses/audit_logs confirma el ENUM sin CANCELADO, CHECK pagado unilateral,
+  índices existentes, JSON válido y ausencia de columnas de emisión/cancelación de proyecto.
+- EXPLAIN en gestion: proyecto por líder/estado usa `idx_projects_leader_status`; ventas por
+  responsable/rango `idx_sales_responsible_issued`; pagos por rango efectivo
+  `idx_payments_effective_status`; audit por entidad/ID/cancelación `idx_audit_entity`.
+- Antes de 009, gastos PAGADO por rango paid_at hacía **ALL**, sin índice candidato. Índice
+  añadido `idx_expenses_status_paid(status,paid_at)` se justifica por esa consulta concreta;
+  ahora EXPLAIN en BD dedicada elige range por ese índice. Medir con dataset real.
+  No añadir índices booleanos ni combinaciones cliente/responsable/tipo por intuición. Los
+  índices actuales sales(client_id,issued_at), sales(type,issued_at), projects(client_id,status)
+  cubren filtros iniciales; JSON de audit no es indexable sin promover campos/tabla.
+- Meses: filtrar con límites UTC; agrupar `DATE_FORMAT(effective_at,'%Y-%m')` produce etiquetas
+  string, pero representa meses UTC. Si el contrato usa meses del estudio, generar límites de
+  cada mes en su zona IANA y agregar por esos rangos; no asumir que UTC y mes local coinciden.
+- No se ejecutó suite PHP/navegador ni se certificó criterio G/H en esta revisión. Faltan pruebas
+  de emisión de borrador, ajuste posterior al corte, cancelación/reapertura, reprogramación de
+  reserva con total distinto, anulación posterior al corte, múltiples refunds sin multiplicar,
+  gastos pagados en otro mes, cobertura histórica incompleta y privacidad de audit. Los
+  resultados previos del principal no prueban este contrato funcional aún no implementado;
+  inventario/validación de hosting y restauración siguen abiertos.
+
+### Verificación de 009 (2026-10-28), sin reinicio de bases compartidas
+
+- BD dedicada **gestion_finance_work**, provisionada expresamente para fase 6 y disponible
+  para backend/QA: instalación completa **001–009** por `bin/migrate.php`, nueve checksums,
+  **35 tablas**, **0 no-InnoDB**, **0 collation distinta de utf8mb4_unicode_ci**, dos triggers.
+  No se escribieron archivos PHP. bin/migrate y SchemaTool ejecutan archivos completos con
+  PDO::exec; no se requieren instrucciones DELIMITER del cliente.
+- **19 probes SQL reales** con fixtures en transacciones, revertidos al terminar: snapshot
+  válido y gasto CANCELADO sin paid_at aceptados; XOR ambos/null, total negativo, billable=2,
+  origen incompatible, emisión posterior al evento, ISSUE sin fecha, CANCEL no cancelado,
+  REOPEN cancelado y gastos CANCELADO/PENDIENTE con paid_at o PAGADO sin fecha fallan **4025**.
+  Audit duplicado falla **1062**, audit inexistente **1452**, borrar audit referenciado **1451**.
+  UPDATE y DELETE del evento fallan **1644/45000** por triggers. Ningún fixture queda persistido.
+- DOWN manual y reaplicación de 009 en esa BD, nunca sobre compartidas. Upgrade de dos gastos
+  de prueba (PENDIENTE 10.00 / PAGADO 20.00 con paid_at real) conserva filas y checksum
+  **1360655166 → 1360655166**. Fixtures dedicados retirados después. Segunda ejecución del
+  migrador: «Sin migraciones pendientes». TRUNCATE de la tabla dedicada vacía funciona, por
+  tanto triggers no impiden el reset de tests; esto también evidencia el riesgo de privilegios DDL.
+- EXPLAIN del último evento por proyecto/corte usa **idx_commercial_events_project_time**,
+  sin filesort en ese plan; rango paid_at usa **idx_expenses_status_paid**. Tablas vacías no
+  certifican rendimiento a volumen real. No se añaden otros índices especulativos.
+- Tras preflight de paid_at (cero conflictos), aplicación autorizada de 009 a **gestion** y
+  **gestion_test**: una migración en cada una; segunda pasada sin pendientes. Ambas tienen
+  35 tablas y dos triggers. Conteos antes/después preservados: gestion **0/0/0/0/0** y
+  gestion_test **0/1/0/0/0** en projects/sales/payments/refunds/expenses; eventos **0** en ambas.
+  No se truncó, borró ni rellenó ningún dato compartido. La base dedicada se conserva a
+  disposición del agente backend; no afirmar que sus fixtures ni la suite funcional estén listos.

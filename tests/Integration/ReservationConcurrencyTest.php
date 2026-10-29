@@ -65,7 +65,7 @@ final class ReservationConcurrencyTest extends DatabaseTestCase
     private function request(string $path, array $body, string $token): array
     {
         return ['database' => 'gestion_test', 'method' => 'POST', 'path' => $path,
-            'body' => $body, 'headers' => F::key(), 'bearer' => $token];
+            'body' => $body, 'headers' => F::key(), 'bearer' => $token, 'await_ack' => true];
     }
 
     private function assertWinnerAndConflict(array $results): void
@@ -122,6 +122,8 @@ final class ReservationConcurrencyTest extends DatabaseTestCase
             $results = [];
             foreach ($children as &$child) {
                 $results[] = json_decode($this->line($child), true, flags: JSON_THROW_ON_ERROR);
+                fwrite($child['pipes'][0], "ACK\n");
+                fflush($child['pipes'][0]);
             }
             unset($child);
             return $results;

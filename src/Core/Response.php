@@ -47,6 +47,18 @@ final class Response
         return new self($status, $html, ['Content-Type' => 'text/html; charset=utf-8']);
     }
 
+    public static function download(string $body, string $filename, string $contentType): self
+    {
+        if (preg_match('/\A[A-Za-z0-9_.-]+\z/', $filename) !== 1 || preg_match('/[\r\n]/', $contentType) === 1) {
+            throw new \InvalidArgumentException('Cabeceras de descarga no válidas.');
+        }
+        return new self(200, $body, [
+            'Content-Type' => $contentType,
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Cache-Control' => 'private, no-store',
+        ]);
+    }
+
     /**
      * @param array<string, mixed> $fields
      */

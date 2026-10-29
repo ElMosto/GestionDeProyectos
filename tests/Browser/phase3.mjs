@@ -115,7 +115,11 @@ await withBrowser('tests/Support/sales-browser-fixtures.php', async ({ fixtures,
     await closeDialog();
     await navigate(`/proyectos/${fixtures.project.id}`);
     await wait(`document.querySelector('#app h1')?.textContent === 'Proyecto cobrable navegador'`, 'Proyecto finalizado con saldo');
-    await click('Finanzas');
+    await evaluate(`(() => {
+        const tab = [...document.querySelectorAll('#app .project-tabs button')].find(n => n.textContent === 'Finanzas');
+        if (!tab) throw new Error('Pestaña financiera del proyecto ausente');
+        tab.click();
+    })()`);
     await wait(`document.querySelector('#app').textContent.includes('Registrar abono')`, 'Finalizar trabajo no liquida cobros');
     await click('Registrar abono');
     await wait(`!!document.querySelector('[role=dialog] [name=amount]')`, 'Abono a proyecto finalizado');

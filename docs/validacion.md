@@ -1,8 +1,24 @@
 # Validación y criterios de aceptación
 
-Evidencia local acumulada de fases 1–5.
+Evidencia local verificada de fases 1–5; fase 6 en integración.
 **No certificado para despliegue**:
 falta inventario real del hosting (`docs/hosting.md`). No se ocultan pruebas fallidas ni skips.
+
+## Fase 6 — en integración; certificaciones externas pendientes
+
+- Migración 009 aplicada y verificada por arquitectura: 35 tablas, historia comercial
+  inmutable, dos triggers y gastos pendientes cancelables. No se fabricó backfill histórico.
+- Snapshots vinculados a auditoría en la misma transacción; integración financiera pendiente.
+- Gantt XLSX y ticket de proyecto implementados: **23 pruebas / 666 aserciones** de la
+  carpeta de exportaciones según ejecución aislada del agente (ZIP/XML y lector PhpSpreadsheet).
+  Falta ejecutar integración de endpoints y suite acumulada tras terminar backend financiero.
+- Límites propuestos en D-30, con errores explícitos en lugar de recorte silencioso.
+- **Bloqueo C:** no hay Excel ni LibreOffice instalados en este entorno. La lectura por
+  PhpSpreadsheet y la validación del ZIP/XML no certifican apertura visual sin reparación
+  en esas dos aplicaciones. No se declara cumplido ese punto ni la impresión física.
+- **Bloqueo H:** sigue faltando el inventario real de hosting/Apache/HTTPS/privilegios TRIGGER;
+  los resultados locales no sustituyen la instalación/restauración en hosting equivalente.
+- Dashboard, gastos, settings, auditoría, manuales y restauración local están en desarrollo.
 
 ## Fase 5 — verificada localmente
 

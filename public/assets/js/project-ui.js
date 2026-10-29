@@ -37,7 +37,7 @@ export async function loadSection(root, load, paint) {
 }
 
 /** Dialog owns its request and keeps user input on validation/network failures. */
-export function editDialog({ title, fields, save, done, submitLabel = 'Guardar', transform = (v) => v }) {
+export function editDialog({ title, fields, save, done, submitLabel = 'Guardar', transform = (v) => v, toastMessage = 'Cambios guardados.' }) {
     const alert = formAlert();
     const form = el('form', { class: 'stack phase2-form' }, [alert, ...fields]);
     let busy = false;
@@ -52,7 +52,7 @@ export function editDialog({ title, fields, save, done, submitLabel = 'Guardar',
         busy = true; submit.disabled = true; cancel.disabled = true;
         try {
             const response = await save(transform(formValues(form), form));
-            dialog.close(); toast('Cambios guardados.', { tone: 'success' });
+            dialog.close(); toast(toastMessage, { tone: 'success' });
             if (done) await done(response);
         } catch (error) {
             applyFormError(error, form, alert);

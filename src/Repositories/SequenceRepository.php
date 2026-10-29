@@ -6,6 +6,11 @@ namespace App\Repositories;
 
 final class SequenceRepository extends ProjectStorage
 {
+    public function nextExpense(): string
+    {
+        return $this->nextGlobal('expense', 'GAS');
+    }
+
     public function nextSale(): string
     {
         return $this->nextGlobal('sale', 'VTA');

@@ -33,6 +33,9 @@ indicada.
 | D-25 | Agenda personal privada incluso para ADMIN. Pendiente/rechazado recibe detalle mínimo de invitación para responder, no incorporación al calendario. Notificaciones persistidas genéricas sin dinero, títulos ni textos privados del objeto. | Propuesta conservadora | 5 |
 | D-26 | Cruces personales propios requieren acknowledge_conflicts explícito; se permite continuar sin revelar actividades ajenas. La ocupación de espacio nunca se omite con esa confirmación. Solo cambios temporales reinician aceptaciones; cambios de texto/lugar mantienen respuestas. | Propuesta conservadora | 5 |
 | D-27 | Sondeo de avisos cada 60 s mientras la bandeja esté abierta y la pestaña visible; detener al navegar/salir. No hay campana global ni sondeo en segundo plano. | Propuesta | 5 |
+| D-28 | Historia comercial append-only por snapshots desde fase 6, vinculados a auditoría. En proyectos, emisión comercial = creación explícita del documento (independiente del estado operativo BORRADOR), preservando los cobros ya permitidos en ese estado. No equivale a cobro ni factura fiscal. Ventas se emiten por su operación existente. | Propuesta para compatibilidad del contrato | 6 |
+| D-29 | Los cortes sin historia suficiente se rechazan con HISTORY_INCOMPLETE; no se sustituye por total actual ni se retrofechan snapshots. La migración no fabrica historia. Gastos cancelables solo mientras pendientes; los pagados no se borran ni se convierten a pendientes para ocultar caja. | Propuesta conservadora | 6 |
+| D-30 | Gantt: máximo 10.000 tareas, 1.000 etapas, 200.000 celdas y cinco años por descarga; escala diaria hasta 180 días, semanal después. Texto mayor de 32.767 caracteres se rechaza. Reducir/dividir mediante from/to; nunca truncar en silencio. | Propuesta para recursos de hosting pendientes | 6 |
 
 ## Puntos abiertos heredados del §21
 

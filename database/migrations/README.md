@@ -16,6 +16,7 @@ Esquema MariaDB del Sistema de Gestión para Estudio Musical. Fuente normativa:
 | 006 | `006_finance.sql` | `payments`, `refunds`, `expenses` |
 | 007 | `007_tasks_required.sql` | Añade `tasks.is_required` y su CHECK; no crea tablas |
 | 008 | `008_sales_cancelled_draft.sql` | Permite cancelar borrador sin inventar fecha de emisión; EMITIDA sigue exigiéndola |
+| 009 | `009_commercial_history.sql` | Historia comercial append-only con auditoría; cancelación de gastos pendientes e índice de pago |
 
 Después, en este orden: `database/seeds/001_roles.sql`, `002_settings.sql`, `003_sequences.sql`.
 

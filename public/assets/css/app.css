@@ -1476,3 +1476,11 @@ body.dialog-open {
 @media (min-width: 1024px) {
     .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+/* §11/§17: importes literales del servidor, filtros móviles y tablas accesibles. */
+.finance-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 1rem; margin: 0; }
+.finance-metrics > div { padding: 1rem; }
+.finance-metrics dt { font-weight: 600; }
+.finance-metrics dd { margin: .75rem 0 0; font-size: 1.35rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.finance-filters { align-items: end; }
+.finance-filters fieldset { min-width: 0; }
+.finance-filters button, .finance-filters select, .finance-filters input { min-height: 44px; }

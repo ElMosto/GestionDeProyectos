@@ -11,7 +11,7 @@ Cada fase termina con: pruebas en verde, `docs/fases.md` actualizado, commit y `
 | 3 | Productos, extras, ventas, cobros, tickets de venta | backend-php, documentos-salida, frontend-web, qa-aceptacion | **Completada localmente** |
 | 4 | Espacios, reservas transaccionales, agenda | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
 | 5 | Reuniones, invitaciones, notificaciones | backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
-| 6 | Dashboard, gastos, Gantt XLSX, auditoría, pruebas, despliegue | backend-php, documentos-salida, seguridad-permisos, qa-aceptacion | Pendiente |
+| 6 | Dashboard, gastos, Gantt XLSX, auditoría, pruebas, despliegue | backend-php, documentos-salida, seguridad-permisos, qa-aceptacion | **En curso; certificación de hosting bloqueada** |
 | 7 | App Android (fuera del alcance inicial; contrato ya preparado) | movil-android | Futuro |
 
 ## Fase 0 — Esqueleto (completada)
