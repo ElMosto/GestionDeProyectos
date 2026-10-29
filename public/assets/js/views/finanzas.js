@@ -2,7 +2,7 @@ import { api, el } from '../api.js';
 import { dataTable, errorState, formatDateTime, loadingState, mount, notice, pageHeader } from '../ui.js';
 import { button, moneyText } from '../project-ui.js';
 import { adminAllowed, documentLink, queryString } from '../admin-ui.js';
-import { reportFilters, reportList } from '../finance-ui.js';
+import { financeBarChart, reportFilters, reportList } from '../finance-ui.js';
 import { workLabel } from '../data.js';
 
 export async function renderFinanzas(root, ctx) {
@@ -35,11 +35,15 @@ export async function renderFinanzas(root, ctx) {
             reportList(expenses, '/finance/transactions', { ...filters, kind: 'expense' }, 'Gastos pagados que respaldan caja por fecha efectiva', [
                 { label: 'Folio', render: (r) => r.folio }, { label: 'Concepto', render: (r) => r.concept },
                 { label: 'Pago efectivo', render: (r) => formatDateTime(r.effective_at, zone) }, { label: 'Salida con signo (MXN)', render: (r) => moneyText(r.amount, 'MXN') }], controls.showError));
-            mount(results, [notice({ title: `Corte: ${summary.meta.cut_off} inclusive · UTC`, message: `Periodo comercial y caja: ${filters.from} a ${filters.to}, días UTC. Pendientes: documentos emitidos hasta el corte, no solo los emitidos durante el periodo. Generado: ${formatDateTime(summary.meta.generated_at, zone)}.` }), el('dl', { class: 'finance-metrics' }, metrics.map(([key, label]) => el('div', { class: 'panel' }, [el('dt', { text: label }), el('dd', { text: moneyText(summary.data[key], 'MXN') })]))),
-                el('nav', { class: 'form-actions', 'aria-label': 'Detalle de indicadores' }, [button('Ver emisiones comerciales', () => documents.scrollIntoView()), button('Ver movimientos de caja', () => transactions.scrollIntoView()), button('Ver pendientes al corte', () => receivables.scrollIntoView()), button('Ver gastos pagados efectivos', () => expenses.scrollIntoView()), el('a', { class: 'btn btn-secondary', href: `#/gastos?${queryString({ from: filters.from, to: filters.to, responsible_id: filters.responsible_id })}` }, 'Consultar registro de gastos')]),
-                notice({ message: `${filters.client_id || filters.source_type ? 'Los filtros de cliente u origen excluyen los gastos generales de los indicadores. ' : ''}Emisión comercial, cobro efectivo y fecha del gasto son conceptos distintos. El detalle de gastos pagados usa la fecha efectiva de pago y sus importes negativos son salidas de caja.` }),
-                dataTable({ caption: 'Cobros netos por origen (calculados por el servidor)', rows: Object.entries(summary.data.distribution).map(([origin, amount]) => ({ origin, amount })), columns: [{ label: 'Origen', render: (r) => r.origin === 'PROYECTO' ? 'Proyecto' : workLabel(r.origin) }, { label: 'Cobro neto (MXN)', render: (r) => moneyText(r.amount, 'MXN') }] }),
-                dataTable({ caption: 'Evolución mensual de caja (meses UTC)', rows: cashflow.data, columns: [{ label: 'Mes UTC', render: (r) => r.month }, ...[['net_cash', 'Cobros netos'], ['paid_expenses', 'Gastos pagados'], ['cash_result', 'Resultado de caja']].map(([key, label]) => ({ label: `${label} (MXN)`, render: (r) => moneyText(r[key], 'MXN') }))] }), details]);
+            const monthlyRows = cashflow.data.map((row) => ({ month: row.month, amount: row.net_cash }));
+            const originRows = Object.entries(summary.data.distribution).map(([origin, amount]) => ({ origin: origin === 'PROYECTO' ? 'Proyecto' : workLabel(origin), amount }));
+            mount(results, [notice({ title: `Corte: ${summary.meta.cut_off} inclusive · UTC`, message: `Periodo: ${filters.from} a ${filters.to}, días UTC. Pendientes: documentos emitidos hasta el corte. Generado: ${formatDateTime(summary.meta.generated_at, zone)}.` }),
+                el('dl', { class: 'finance-metrics' }, metrics.map(([key, label]) => el('div', { class: 'panel' }, [el('dt', { text: label }), el('dd', { text: moneyText(summary.data[key], 'MXN') })]))),
+                financeBarChart('Cobros netos por mes (UTC)', monthlyRows, 'month', 'amount'),
+                financeBarChart('Cobros netos por origen', originRows, 'origin', 'amount'),
+                el('nav', { class: 'form-actions', 'aria-label': 'Detalle de indicadores' }, [button('Ver emisiones comerciales', () => documents.scrollIntoView()), button('Ver movimientos de caja', () => transactions.scrollIntoView()), button('Ver pendientes al corte', () => receivables.scrollIntoView()), button('Ver gastos pagados efectivos', () => expenses.scrollIntoView()), el('a', { class: 'btn btn-secondary', href: `#/gastos?from=${encodeURIComponent(filters.from)}&to=${encodeURIComponent(filters.to)}` }, 'Consultar registro de gastos')]),
+                notice({ message: 'Emisión comercial, cobro efectivo y fecha del gasto son conceptos distintos. El detalle de gastos pagados usa la fecha efectiva de pago y sus importes negativos son salidas de caja.' }),
+                details]);
             details.append(documents, transactions, receivables, expenses); await Promise.all(lists.map((l) => l.load()));
         } catch (error) { if (disposed || ticket !== generation) return; controls.showError(error); mount(results, errorState({ error, title: error.code === 'HISTORY_INCOMPLETE' ? 'Historial incompleto: cifras no disponibles; no equivale a cero' : 'No se pudieron consultar las finanzas', onRetry: () => load(filters) })); }
     }

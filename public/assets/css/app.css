@@ -281,6 +281,30 @@ a:hover {
     color: var(--header-muted);
 }
 
+.finance-chart-card {
+    margin: 16px 0;
+    padding: 16px;
+    border: 1px solid var(--color-border, #d9d9e3);
+    border-radius: 12px;
+    background: var(--surface);
+}
+
+.finance-chart {
+    width: 100%;
+    height: auto;
+    overflow: visible;
+}
+
+.finance-chart-label,
+.finance-chart-value {
+    font-size: 12px;
+    fill: var(--color-text, #1f2937);
+}
+
+.finance-chart-value {
+    font-weight: 600;
+}
+
 .app-nav {
     max-width: var(--app-max);
     margin: 0 auto;
