@@ -1,6 +1,6 @@
 # Validación y criterios de aceptación
 
-Evidencia local verificada de fases 1–5; fase 6 en integración.
+Evidencia local verificada de fases 1–6, sin certificación de hosting.
 **No certificado para despliegue**:
 falta inventario real del hosting (`docs/hosting.md`). No se ocultan pruebas fallidas ni skips.
 

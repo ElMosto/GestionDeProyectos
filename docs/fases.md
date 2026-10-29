@@ -11,8 +11,7 @@ Cada fase termina con: pruebas en verde, `docs/fases.md` actualizado, commit y `
 | 3 | Productos, extras, ventas, cobros, tickets de venta | backend-php, documentos-salida, frontend-web, qa-aceptacion | **Completada localmente** |
 | 4 | Espacios, reservas transaccionales, agenda | arquitecto-datos, backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
 | 5 | Reuniones, invitaciones, notificaciones | backend-php, frontend-web, qa-aceptacion | **Completada localmente** |
-| 6 | Dashboard, gastos, Gantt XLSX, auditoría, pruebas, despliegue | backend-php, documentos-salida, seguridad-permisos, qa-aceptacion | **En curso; certificación de hosting bloqueada** |
-| 7 | App Android (fuera del alcance inicial; contrato ya preparado) | movil-android | Futuro |
+| 6 | Dashboard, gastos, Gantt XLSX, auditoría, pruebas, despliegue | backend-php, documentos-salida, seguridad-permisos, qa-aceptacion | **Completada localmente; certificación de hosting bloqueada** || 7 | App Android (fuera del alcance inicial; contrato ya preparado) | movil-android | Futuro |
 
 ## Fase 0 — Esqueleto (completada)
 
@@ -120,6 +119,25 @@ Reuniones/notificaciones y dashboard se implementarán en las fases siguientes.
   Regresión acumulada: **233 comprobaciones** de navegador de fases 1–5.
 
 Hosting sigue pendiente; no se añadieron correo, cron ni servicios externos.
+
+## Fase 6 — Dashboard, gastos, exportaciones y operación (completada localmente)
+
+- [x] Historia comercial append-only con 35 tablas y triggers de inmutabilidad.
+- [x] Dashboard con importe comercial, valor interno separado, cobros netos, caja, pendientes,
+  gastos, distribución por origen y evolución mensual.
+- [x] Detalle conciliable: emisiones comerciales, movimientos de caja y gastos pagados por
+  fecha efectiva.
+- [x] Gastos mutables solo mientras pendientes; pagados y cancelados conservan historial.
+- [x] Settings con digest string, auditoría sin textos privados y preflight de hosting.
+- [x] Gantt XLSX real con Resumen/Gantt, formatos condicionales, fechas y límites explícitos.
+- [x] Ticket de proyecto con permisos, total interno rotulado y aviso no fiscal.
+- [x] **416 pruebas / 8.865 aserciones**, más **47 comprobaciones** de navegador.
+  Regresión acumulada: **280 comprobaciones** de navegador de fases 1–6.
+- [x] Manuales, preflight y ensayo de restauración cifrada verificados localmente.
+
+Limitaciones reales que permanecen abiertas: hosting no inventariado, Excel/LibreOffice de
+escritorio no disponibles, impresora física no probada y benchmark de 20 usuarios no medido.
+La fase 7 queda fuera del alcance inicial y solo requiere contrato estable.
 
 ## Riesgos conocidos por fase
 
